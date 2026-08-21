@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Env
+.env
+
+# Data
+data/raw/*
+!data/raw/.gitkeep
+data/processed/*
+!data/processed/.gitkeep
+data/vectorstore/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Model artifacts
+backend/ml/artifacts/*
+!backend/ml/artifacts/.gitkeep
+
+# Misc
+.DS_Store
+*.log
+.ipynb_checkpoints/
