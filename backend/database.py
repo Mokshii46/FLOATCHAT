@@ -1,35 +1,63 @@
 """
-SQLAlchemy engine/session setup + PostGIS bootstrap.
-
-Two DB roles are expected in production:
-  - the "app" role used here (read/write, for ETL loads)
-  - a separate read-only role used by nl2sql/sql_validator.py for
-    executing LLM-generated SQL safely (never the app role).
+SQLAlchemy engine/session setup + PostGIS bootstrap with automatic SQLite fallback.
 """
 
 from contextlib import contextmanager
+from pathlib import Path
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from config import settings
+from utils.logger import get_logger
 
-engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
+logger = get_logger(__name__)
+
+DB_PATH = Path(__file__).parent / "floatchat.db"
+
+# Create primary engine
+try:
+    engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
+except Exception:
+    engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}, future=True)
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-
 Base = declarative_base()
 
 
+def _fallback_to_sqlite():
+    global engine, SessionLocal
+    logger.warning(
+        "PostgreSQL connection failed. Falling back to local SQLite database (sqlite:///%s). "
+        "Start Docker or Postgres for full PostGIS support.", DB_PATH
+    )
+    engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}, future=True)
+    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+
+
 def init_db() -> None:
-    """Create PostGIS extension (idempotent) and all ORM tables."""
-    with engine.connect() as conn:
-        conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis;"))
-        conn.commit()
+    """Create database extensions/tables with automatic fallback."""
+    global engine
+    # Try connecting to configured DB
+    try:
+        with engine.connect() as conn:
+            if "postgresql" in engine.dialect.name:
+                try:
+                    conn.execute(text("CREATE EXTENSION IF NOT EXISTS postgis;"))
+                    conn.commit()
+                except Exception as e:
+                    logger.warning("Could not enable PostGIS extension: %s", e)
+    except Exception as exc:
+        logger.warning("Database connection error: %s", exc)
+        _fallback_to_sqlite()
 
     # Import models so they register on Base.metadata before create_all
-    from models import float_metadata, profile, trajectory, bgc_profile  # noqa: F401
-
-    Base.metadata.create_all(bind=engine)
+    try:
+        from models import float_metadata, profile, trajectory, bgc_profile  # noqa: F401
+        Base.metadata.create_all(bind=engine)
+        logger.info("Database tables verified using dialect: %s", engine.dialect.name)
+    except Exception as exc:
+        logger.error("Failed to create tables: %s", exc)
 
 
 def get_db():

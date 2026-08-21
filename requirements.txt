@@ -1,47 +1,46 @@
 # --- Web framework ---
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.9.2
-pydantic-settings==2.5.2
+fastapi>=0.110.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+pydantic-settings>=2.2.0
+python-multipart>=0.0.9
 
 # --- Database ---
-sqlalchemy==2.0.35
-psycopg2-binary==2.9.9
-geoalchemy2==0.15.2
-shapely==2.0.6
-alembic==1.13.2
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+geoalchemy2>=0.14.0
+shapely>=2.0.0
+alembic>=1.13.0
 
 # --- ARGO data ---
-argopy==0.1.16
-xarray==2024.9.0
-netCDF4==1.7.1
-pandas==2.2.3
-numpy==2.1.1
+argopy>=0.1.15
+xarray>=2023.1.0
+netCDF4>=1.6.0
+pandas>=2.0.0
+numpy>=1.26.0
 
 # --- Vector store / RAG ---
-chromadb==0.5.5
-sentence-transformers==3.1.1
+chromadb>=0.5.0
+sentence-transformers>=3.0.0
 
 # --- LLM ---
-anthropic==0.34.2
+anthropic>=0.30.0
+groq>=0.9.0
 
 # --- ML (USP 1, USP 3) ---
-scikit-learn==1.5.2
-scipy==1.14.1
-
-# --- Voice (USP 4) ---
-openai-whisper==20231117
+scikit-learn>=1.4.0
+scipy>=1.12.0
 
 # --- Viz / export ---
-plotly==5.24.1
+plotly>=5.20.0
 
 # --- Scheduling ---
-apscheduler==3.10.4
+apscheduler>=3.10.0
 
 # --- Testing ---
-pytest==8.3.3
-httpx==0.27.2
+pytest>=8.0.0
+httpx>=0.27.0
 
 # --- Utils ---
-python-dotenv==1.0.1
-tenacity==9.0.0
+python-dotenv>=1.0.0
+tenacity>=8.2.0

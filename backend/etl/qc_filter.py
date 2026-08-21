@@ -1,74 +1,65 @@
 """
-Apply Argo QC-flag filtering per the Argo QC manual:
-  1 = good, 2 = probably good, 3 = probably bad, 4 = bad,
-  5 = changed, 8 = estimated, 9 = missing.
+QC filter — keeps only Argo "good" (1) and "probably good" (2) observations.
 
-We keep 1 and 2 by default ("good" / "probably good"). Rows failing QC
-on a given variable have that variable nulled rather than the whole row
-dropped, unless `drop_failed_rows=True` — pressure failing QC always
-drops the row since depth is required.
+Argo QC flag definitions
+  0 = no QC performed
+  1 = good data            ← keep
+  2 = probably good data   ← keep
+  3 = probably bad data    ← drop
+  4 = bad data             ← drop
+  5 = value changed        ← keep (post-correction)
+  6 = not used
+  7 = not used
+  8 = interpolated value   ← keep
+  9 = missing value        ← drop
 """
 
-from __future__ import annotations
+from utils.logger import get_logger
 
-import logging
+logger = get_logger(__name__)
 
-import pandas as pd
-
-logger = logging.getLogger(__name__)
-
-GOOD_FLAGS = {"1", "2"}
+KEEP_FLAGS: frozenset[str] = frozenset({"1", "2", "5", "8"})
 
 
-def qc_filter(
-    df: pd.DataFrame,
-    qc_column_pairs: list[tuple[str, str]],
-    drop_failed_rows: bool = False,
-) -> pd.DataFrame:
+def _qc_ok(flag: str | None) -> bool:
+    if flag is None:
+        return True          # no QC info → include by default
+    return str(flag).strip() in KEEP_FLAGS
+
+
+def filter_profiles(rows: list[dict]) -> list[dict]:
     """
-    qc_column_pairs: list of (value_col, qc_col) tuples, e.g.
-        [("temperature", "temperature_qc"), ("salinity", "salinity_qc")]
+    Return only profile rows where ALL QC flags (pressure, temp, salinity)
+    are in the keep set.  Rows missing a parameter but with good pressure
+    are still included — e.g. missing salinity doesn't discard a valid T row.
     """
-    df = df.copy()
-    before = len(df)
+    before = len(rows)
+    kept = []
+    for r in rows:
+        pres_ok = _qc_ok(r.get("pressure_qc"))
+        temp_ok = _qc_ok(r.get("temperature_qc"))
+        psal_ok = _qc_ok(r.get("salinity_qc"))
 
-    for value_col, qc_col in qc_column_pairs:
-        if qc_col not in df.columns or value_col not in df.columns:
-            continue
-        is_bad = ~df[qc_col].astype(str).str.strip().isin(GOOD_FLAGS)
-        if drop_failed_rows:
-            df = df[~is_bad]
-        else:
-            df.loc[is_bad, value_col] = None
+        # require at least pressure QC to be good
+        if pres_ok and (temp_ok or psal_ok):
+            kept.append(r)
 
-    # Pressure (depth) is load-bearing — always drop rows without it
-    if "pressure" in df.columns:
-        df = df.dropna(subset=["pressure"])
-    if "pressure_qc" in df.columns:
-        bad_pressure = ~df["pressure_qc"].astype(str).str.strip().isin(GOOD_FLAGS)
-        df = df[~bad_pressure]
-
-    logger.info("QC filter: %d -> %d rows (dropped %d)", before, len(df), before - len(df))
-    return df
+    logger.info("QC filter: %d → %d profile rows (%.1f%% retained)",
+                before, len(kept), 100 * len(kept) / before if before else 0)
+    return kept
 
 
-def qc_filter_core(df: pd.DataFrame) -> pd.DataFrame:
-    return qc_filter(
-        df,
-        qc_column_pairs=[
-            ("temperature", "temperature_qc"),
-            ("salinity", "salinity_qc"),
-        ],
-    )
-
-
-def qc_filter_bgc(df: pd.DataFrame) -> pd.DataFrame:
-    return qc_filter(
-        df,
-        qc_column_pairs=[
-            ("dissolved_oxygen", "dissolved_oxygen_qc"),
-            ("chlorophyll", "chlorophyll_qc"),
-            ("ph", "ph_qc"),
-            ("nitrate", "nitrate_qc"),
-        ],
-    )
+def filter_bgc_profiles(rows: list[dict]) -> list[dict]:
+    """
+    Keep BGC rows where at least one parameter has a valid QC flag.
+    """
+    bgc_qc_fields = [
+        "dissolved_oxygen_qc", "chlorophyll_qc", "ph_qc", "nitrate_qc"
+    ]
+    before = len(rows)
+    kept = [
+        r for r in rows
+        if any(_qc_ok(r.get(f)) for f in bgc_qc_fields)
+    ]
+    logger.info("BGC QC filter: %d → %d rows", before, len(kept))
+    return kept

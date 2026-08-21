@@ -1,18 +1,19 @@
-"""Shared logging config — import `get_logger(__name__)` anywhere."""
+"""Structured logger for FloatChat backend."""
 
 import logging
 import sys
 
-from config import settings
-
-_LEVEL = logging.DEBUG if settings.app_env == "development" else logging.INFO
-
-logging.basicConfig(
-    level=_LEVEL,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    stream=sys.stdout,
-)
-
 
 def get_logger(name: str) -> logging.Logger:
-    return logging.getLogger(name)
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setFormatter(
+            logging.Formatter(
+                fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
+    return logger

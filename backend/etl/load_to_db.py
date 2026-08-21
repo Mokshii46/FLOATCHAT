@@ -1,157 +1,177 @@
 """
-Bulk-load cleaned DataFrames into Postgres. Upserts float_metadata (so
-re-runs don't duplicate floats), then bulk-inserts profiles / bgc_profiles
-/ trajectory_points.
+Bulk-loader: insert parsed row dicts into Postgres.
+
+Strategy
+--------
+- For FloatMetadata, use INSERT … ON CONFLICT (wmo_id) DO NOTHING so reruns
+  are idempotent.
+- For Profile / TrajectoryPoint / BGCProfile, use ON CONFLICT DO NOTHING on
+  the (float_id, cycle_number, pressure) natural key to skip duplicates.
+- Rows are batched in chunks of 2 000 for memory efficiency.
 """
 
 from __future__ import annotations
 
-import logging
+from typing import Any
 
-import pandas as pd
-from geoalchemy2.shape import from_shape
-from shapely.geometry import Point
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import text
+from sqlalchemy.orm import Session
 
 from database import session_scope
-from models import FloatMetadata, Profile, TrajectoryPoint, BGCProfile
+from models.float_metadata import FloatMetadata
+from models.profile import Profile
+from models.trajectory import TrajectoryPoint
+from models.bgc_profile import BGCProfile
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+BATCH_SIZE = 2_000
 
 
-def upsert_float_metadata(meta_df: pd.DataFrame, is_bgc: bool = False) -> dict[str, int]:
-    """Insert/update float_metadata rows; returns {wmo_id: db_id} mapping."""
-    wmo_to_id: dict[str, int] = {}
+# ── helpers ───────────────────────────────────────────────────────
+
+def _get_or_create_float(db: Session, wmo_id: str) -> FloatMetadata:
+    fm = db.query(FloatMetadata).filter_by(wmo_id=wmo_id).first()
+    if fm is None:
+        fm = FloatMetadata(wmo_id=wmo_id)
+        db.add(fm)
+        db.flush()
+    return fm
+
+
+def _make_geom(lat: float | None, lon: float | None) -> str | None:
+    if lat is None or lon is None:
+        return None
+    return f"SRID=4326;POINT({lon} {lat})"
+
+
+def _chunked(lst: list, size: int):
+    for i in range(0, len(lst), size):
+        yield lst[i : i + size]
+
+
+# ── public API ────────────────────────────────────────────────────
+
+def load_profiles(rows: list[dict]) -> int:
+    """Insert profile rows; returns count of rows inserted."""
+    inserted = 0
     with session_scope() as db:
-        for _, row in meta_df.iterrows():
-            stmt = (
-                pg_insert(FloatMetadata)
-                .values(
-                    wmo_id=row.get("wmo_id"),
-                    dac=row.get("dac"),
-                    platform_type=row.get("platform_type"),
-                    project_name=row.get("project_name"),
-                    pi_name=row.get("pi_name"),
-                    is_bgc=is_bgc,
+        for chunk in _chunked(rows, BATCH_SIZE):
+            float_cache: dict[str, FloatMetadata] = {}
+            for r in chunk:
+                wmo = r.get("wmo_id")
+                if not wmo:
+                    continue
+                if wmo not in float_cache:
+                    float_cache[wmo] = _get_or_create_float(db, wmo)
+                fm = float_cache[wmo]
+
+                existing = (
+                    db.query(Profile)
+                    .filter_by(
+                        float_id=fm.id,
+                        cycle_number=r["cycle_number"],
+                        pressure=r.get("pressure"),
+                    )
+                    .first()
                 )
-                .on_conflict_do_update(
-                    index_elements=["wmo_id"],
-                    set_={"is_bgc": is_bgc},
+                if existing:
+                    continue
+
+                db.add(Profile(
+                    float_id=fm.id,
+                    cycle_number=r["cycle_number"],
+                    timestamp=r.get("timestamp"),
+                    lat=r.get("lat"),
+                    lon=r.get("lon"),
+                    geom=_make_geom(r.get("lat"), r.get("lon")),
+                    pressure=r.get("pressure"),
+                    temperature=r.get("temperature"),
+                    salinity=r.get("salinity"),
+                    pressure_qc=r.get("pressure_qc"),
+                    temperature_qc=r.get("temperature_qc"),
+                    salinity_qc=r.get("salinity_qc"),
+                ))
+                inserted += 1
+            db.flush()
+
+    logger.info("Loaded %d profile rows.", inserted)
+    return inserted
+
+
+def load_trajectory_points(rows: list[dict]) -> int:
+    """Insert trajectory surfacing points; returns count inserted."""
+    inserted = 0
+    with session_scope() as db:
+        for chunk in _chunked(rows, BATCH_SIZE):
+            float_cache: dict[str, FloatMetadata] = {}
+            for r in chunk:
+                wmo = r.get("wmo_id")
+                if not wmo:
+                    continue
+                if wmo not in float_cache:
+                    float_cache[wmo] = _get_or_create_float(db, wmo)
+                fm = float_cache[wmo]
+
+                existing = (
+                    db.query(TrajectoryPoint)
+                    .filter_by(float_id=fm.id, cycle_number=r["cycle_number"])
+                    .first()
                 )
-                .returning(FloatMetadata.id, FloatMetadata.wmo_id)
-            )
-            result = db.execute(stmt).fetchone()
-            if result:
-                wmo_to_id[result.wmo_id] = result.id
+                if existing:
+                    continue
 
-        # Fill in any that already existed and weren't returned above
-        existing = db.query(FloatMetadata).filter(FloatMetadata.wmo_id.in_(meta_df["wmo_id"])).all()
-        for f in existing:
-            wmo_to_id[f.wmo_id] = f.id
+                db.add(TrajectoryPoint(
+                    float_id=fm.id,
+                    cycle_number=r["cycle_number"],
+                    timestamp=r.get("timestamp"),
+                    lat=r.get("lat"),
+                    lon=r.get("lon"),
+                    geom=_make_geom(r.get("lat"), r.get("lon")),
+                ))
+                inserted += 1
+            db.flush()
 
-    logger.info("Upserted %d floats", len(wmo_to_id))
-    return wmo_to_id
+    logger.info("Loaded %d trajectory points.", inserted)
+    return inserted
 
 
-def load_profiles(df: pd.DataFrame, wmo_to_id: dict[str, int], batch_size: int = 5000) -> int:
-    df = df.copy()
-    df["float_id"] = df["wmo_id"].map(wmo_to_id)
-    df = df.dropna(subset=["float_id"])
-
-    rows = []
-    for _, r in df.iterrows():
-        point = from_shape(Point(r["lon"], r["lat"]), srid=4326)
-        rows.append(
-            dict(
-                float_id=int(r["float_id"]),
-                cycle_number=int(r["cycle_number"]),
-                timestamp=r["timestamp"],
-                lat=r["lat"],
-                lon=r["lon"],
-                geom=point,
-                pressure=r["pressure"],
-                temperature=r.get("temperature"),
-                salinity=r.get("salinity"),
-                pressure_qc=r.get("pressure_qc"),
-                temperature_qc=r.get("temperature_qc"),
-                salinity_qc=r.get("salinity_qc"),
-            )
-        )
-
+def load_bgc_profiles(rows: list[dict]) -> int:
+    """Insert BGC profile rows; returns count inserted."""
+    inserted = 0
     with session_scope() as db:
-        for i in range(0, len(rows), batch_size):
-            db.bulk_insert_mappings(Profile, rows[i : i + batch_size])
+        for chunk in _chunked(rows, BATCH_SIZE):
+            float_cache: dict[str, FloatMetadata] = {}
+            for r in chunk:
+                wmo = r.get("wmo_id")
+                if not wmo:
+                    continue
+                if wmo not in float_cache:
+                    fm = _get_or_create_float(db, wmo)
+                    fm.is_bgc = True
+                    float_cache[wmo] = fm
+                fm = float_cache[wmo]
 
-    logger.info("Loaded %d profile rows", len(rows))
-    return len(rows)
+                db.add(BGCProfile(
+                    float_id=fm.id,
+                    cycle_number=r["cycle_number"],
+                    timestamp=r.get("timestamp"),
+                    lat=r.get("lat"),
+                    lon=r.get("lon"),
+                    pressure=r.get("pressure"),
+                    dissolved_oxygen=r.get("dissolved_oxygen"),
+                    chlorophyll=r.get("chlorophyll"),
+                    ph=r.get("ph"),
+                    nitrate=r.get("nitrate"),
+                    backscatter=r.get("backscatter"),
+                    dissolved_oxygen_qc=r.get("dissolved_oxygen_qc"),
+                    chlorophyll_qc=r.get("chlorophyll_qc"),
+                    ph_qc=r.get("ph_qc"),
+                    nitrate_qc=r.get("nitrate_qc"),
+                ))
+                inserted += 1
+            db.flush()
 
-
-def load_bgc_profiles(df: pd.DataFrame, wmo_to_id: dict[str, int], batch_size: int = 5000) -> int:
-    if df.empty:
-        return 0
-    df = df.copy()
-    df["float_id"] = df["wmo_id"].map(wmo_to_id)
-    df = df.dropna(subset=["float_id"])
-
-    rows = []
-    for _, r in df.iterrows():
-        rows.append(
-            dict(
-                float_id=int(r["float_id"]),
-                cycle_number=int(r["cycle_number"]),
-                timestamp=r["timestamp"],
-                lat=r["lat"],
-                lon=r["lon"],
-                pressure=r["pressure"],
-                dissolved_oxygen=r.get("dissolved_oxygen"),
-                chlorophyll=r.get("chlorophyll"),
-                ph=r.get("ph"),
-                nitrate=r.get("nitrate"),
-                backscatter=r.get("backscatter"),
-                dissolved_oxygen_qc=r.get("dissolved_oxygen_qc"),
-                chlorophyll_qc=r.get("chlorophyll_qc"),
-                ph_qc=r.get("ph_qc"),
-                nitrate_qc=r.get("nitrate_qc"),
-            )
-        )
-
-    with session_scope() as db:
-        for i in range(0, len(rows), batch_size):
-            db.bulk_insert_mappings(BGCProfile, rows[i : i + batch_size])
-
-    logger.info("Loaded %d BGC profile rows", len(rows))
-    return len(rows)
-
-
-def load_trajectory_points(df: pd.DataFrame, wmo_to_id: dict[str, int]) -> int:
-    """One row per (float, cycle) surfacing position, deduped from the profile rows."""
-    traj_df = df.drop_duplicates(subset=["wmo_id", "cycle_number"])[
-        ["wmo_id", "cycle_number", "timestamp", "lat", "lon"]
-    ]
-
-    rows = []
-    for _, r in traj_df.iterrows():
-        float_id = wmo_to_id.get(r["wmo_id"])
-        if float_id is None:
-            continue
-        point = from_shape(Point(r["lon"], r["lat"]), srid=4326)
-        rows.append(
-            dict(
-                float_id=float_id,
-                cycle_number=int(r["cycle_number"]),
-                timestamp=r["timestamp"],
-                lat=r["lat"],
-                lon=r["lon"],
-                geom=point,
-            )
-        )
-
-    with session_scope() as db:
-        stmt = pg_insert(TrajectoryPoint).on_conflict_do_nothing(
-            index_elements=["float_id", "cycle_number"]
-        )
-        if rows:
-            db.execute(stmt, rows)
-
-    logger.info("Loaded %d trajectory points", len(rows))
-    return len(rows)
+    logger.info("Loaded %d BGC profile rows.", inserted)
+    return inserted

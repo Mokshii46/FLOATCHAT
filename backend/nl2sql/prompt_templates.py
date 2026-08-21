@@ -1,86 +1,67 @@
 """
-Builds the prompt sent to the LLM for freeform NL2SQL (used only when
-router.py finds no template match). Keeps the system prompt strict about
-output format so query_generator.py can parse it reliably, and injects
-schema context retrieved from the vector store so the model can't
-hallucinate column names.
+Prompt templates for NL → SQL via Claude.
+
+The system prompt is constructed once and cached; it injects:
+  - The database schema (from RAG context)
+  - Few-shot examples (from RAG context)
+  - Hard rules about SQL safety
 """
 
-from __future__ import annotations
+SYSTEM_PROMPT_BASE = """You are FloatChat's SQL expert for the ARGO ocean float database.
+Your sole job is to convert a user's natural-language question into a single valid PostgreSQL
+SELECT statement.
 
-from config import settings
-
-SYSTEM_PROMPT = """You are a PostgreSQL query generator for FloatChat, a system that answers \
-questions about ARGO ocean float data. You are given schema documentation for the relevant \
-tables and a user's natural-language question. Your job is to output ONE valid, read-only \
-PostgreSQL SELECT statement that answers it.
-
-Rules:
-- Output ONLY the SQL statement. No explanation, no markdown code fences, no commentary.
-- SELECT statements only. Never write INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, GRANT, \
-or any other write/DDL statement.
-- Only use tables and columns that appear in the provided schema context. Never invent a \
-column name.
-- Always join through float_metadata.id (not wmo_id directly) when filtering by a float's \
-WMO id.
-- Always include an explicit LIMIT clause. If the question doesn't imply a specific row \
-count, use LIMIT {max_rows}.
-- Use PostGIS functions (ST_Within, ST_DWithin, ST_MakeEnvelope) for spatial filters when a \
-geometry column is available, or plain lat/lon BETWEEN filters otherwise.
-- If the question cannot be answered with the given schema, output exactly: \
-SELECT 'unanswerable' AS error LIMIT 1
-"""
-
-FEW_SHOT_EXAMPLES = [
-    (
-        "What was the average salinity in the Arabian Sea in March 2023?",
-        """SELECT AVG(p.salinity) AS avg_salinity, COUNT(*) AS n_obs
-FROM profiles p
-WHERE p.lon BETWEEN 50 AND 78
-  AND p.lat BETWEEN 5 AND 25
-  AND p.timestamp BETWEEN '2023-03-01' AND '2023-04-01'
-LIMIT 5000;""",
-    ),
-    (
-        "Which floats are currently active?",
-        """SELECT wmo_id, platform_type, dac
-FROM float_metadata
-WHERE status = 'active'
-ORDER BY wmo_id
-LIMIT 5000;""",
-    ),
-    (
-        "Show me the chlorophyll trend for BGC floats near the equator in 2022.",
-        """SELECT date_trunc('month', b.timestamp) AS month, AVG(b.chlorophyll) AS avg_chlorophyll
-FROM bgc_profiles b
-JOIN float_metadata fm ON fm.id = b.float_id
-WHERE fm.is_bgc = TRUE
-  AND b.lat BETWEEN -5 AND 5
-  AND b.timestamp BETWEEN '2022-01-01' AND '2023-01-01'
-GROUP BY 1
-ORDER BY 1
-LIMIT 5000;""",
-    ),
-]
-
-
-def build_prompt(question: str, schema_context: str) -> list[dict]:
-    """Returns the `messages` list ready to pass to the Anthropic API."""
-    examples_text = "\n\n".join(
-        f"Question: {q}\nSQL:\n{sql}" for q, sql in FEW_SHOT_EXAMPLES
-    )
-
-    user_content = f"""Schema context:
+=== DATABASE CONTEXT ===
 {schema_context}
 
-Examples:
-{examples_text}
+=== RULES ===
+1. Output ONLY the raw SQL query — no explanation, no markdown, no backticks.
+2. Always include LIMIT 5000 (the system will cap it regardless).
+3. Only reference tables: float_metadata, profiles, trajectory_points, bgc_profiles.
+4. Never use DROP, DELETE, UPDATE, INSERT, TRUNCATE, ALTER, or any DDL/DML.
+5. Use aliases: fm=float_metadata, p=profiles, tp=trajectory_points, b=bgc_profiles.
+6. When the user asks about a region (e.g. "Arabian Sea", "Bay of Bengal"), use these bounding
+   boxes:
+     Arabian Sea: lat 5–25, lon 55–77
+     Bay of Bengal: lat 5–22, lon 80–98
+     Indian Ocean: lat -60–30, lon 20–120
+7. "Sea surface" means pressure BETWEEN 0 AND 10 (dbar ≈ meters).
+8. Default to the last 3 years if no date range is specified.
+9. Return NULL / IS NOT NULL safe queries for BGC columns (many rows will be NULL).
+10. Do NOT invent column names — refer only to the schema above.
+"""
 
-Question: {question}
-SQL:"""
+SUMMARY_SYSTEM_PROMPT = """You are FloatChat, a friendly oceanography assistant.
+The user asked: {question}
 
-    return [{"role": "user", "content": user_content}]
+A database query returned these results (first rows shown):
+{results_preview}
+
+Write a concise, clear 2–4 sentence summary of these results for a {mode} audience.
+- Citizen mode: use plain language, no jargon, highlight the key finding.
+- Researcher mode: include exact values, QC context, caveats about data coverage.
+Respond in {language}.
+"""
 
 
-def build_system_prompt() -> str:
-    return SYSTEM_PROMPT.format(max_rows=settings.max_result_rows)
+def build_sql_prompt(user_question: str, schema_context: str) -> list[dict]:
+    """Return the messages list for the Claude API call."""
+    system = SYSTEM_PROMPT_BASE.format(schema_context=schema_context)
+    return [
+        {"role": "user", "content": user_question}
+    ], system
+
+
+def build_summary_prompt(
+    question: str,
+    results_preview: str,
+    mode: str = "citizen",
+    language: str = "English",
+) -> list[dict]:
+    system = SUMMARY_SYSTEM_PROMPT.format(
+        question=question,
+        results_preview=results_preview,
+        mode=mode,
+        language=language,
+    )
+    return [{"role": "user", "content": "Summarise the results."}], system

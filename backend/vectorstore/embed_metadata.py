@@ -1,104 +1,78 @@
 """
-Populates the two Chroma collections used by chroma_client.py:
+Embed schema documentation markdown files into the Chroma vector store.
 
-  1. schema_docs      — one chunk per markdown file in schema_docs/, so the
-                         NL2SQL prompt gets the right table docs for the
-                         question ("temperature" -> profiles.md, not bgc).
-  2. float_summaries   — one short text summary per float in float_metadata,
-                         so the LLM can resolve "the INCOIS float near the
-                         equator" style references without extra DB calls.
+Called at startup from main.py (idempotent — skips if collection already
+has documents).  Can also be run as a standalone script:
 
-Run standalone: `python -m vectorstore.embed_metadata`
-Safe to re-run — collections are wiped and rebuilt each time (small data,
-cheap to redo; avoids drift between the DB and the vector store).
+    python -m vectorstore.embed_metadata
 """
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 
-from database import session_scope
-from models import FloatMetadata
-from vectorstore.chroma_client import (
-    SCHEMA_DOCS_DIR,
-    get_schema_collection,
-    get_float_collection,
-)
+from vectorstore.chroma_client import get_chroma_client
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-
-def embed_schema_docs() -> int:
-    collection = get_schema_collection()
-
-    existing = collection.get()["ids"]
-    if existing:
-        collection.delete(ids=existing)
-
-    ids, docs, metadatas = [], [], []
-    for path in sorted(SCHEMA_DOCS_DIR.glob("*.md")):
-        table_name = path.stem
-        ids.append(f"schema::{table_name}")
-        docs.append(path.read_text())
-        metadatas.append({"table": table_name, "source": str(path)})
-
-    if docs:
-        collection.add(ids=ids, documents=docs, metadatas=metadatas)
-
-    logger.info("Embedded %d schema doc chunks", len(docs))
-    return len(docs)
+SCHEMA_DOCS_DIR = Path(__file__).parent / "schema_docs"
+CHUNK_SIZE = 800          # characters per chunk
+CHUNK_OVERLAP = 100
 
 
-def _float_summary(f: FloatMetadata) -> str:
-    kind = "BGC" if f.is_bgc else "core"
-    parts = [
-        f"Float WMO {f.wmo_id} ({kind} float, platform {f.platform_type or 'unknown'}).",
-        f"Operated by DAC '{f.dac}'." if f.dac else "",
-        f"Project: {f.project_name}." if f.project_name else "",
-        f"PI: {f.pi_name}." if f.pi_name else "",
-        f"Deployed {f.deploy_date} near ({f.deploy_lat}, {f.deploy_lon})."
-        if f.deploy_date
-        else "",
-        f"Status: {f.status}.",
-    ]
-    return " ".join(p for p in parts if p)
+def _chunk_text(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+    """Split text into overlapping character chunks."""
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + size, len(text))
+        chunks.append(text[start:end])
+        start += size - overlap
+    return chunks
 
 
-def embed_float_summaries(batch_size: int = 500) -> int:
-    collection = get_float_collection()
+def embed_schema_docs_if_empty() -> int:
+    """
+    Embed all .md files from schema_docs/ only if the collection is empty.
+    Returns the number of documents upserted (0 if skipped).
+    """
+    client = get_chroma_client()
+    if client.count() > 0:
+        logger.info("Vector store already populated (%d docs). Skipping embed.", client.count())
+        return 0
 
-    existing = collection.get()["ids"]
-    if existing:
-        collection.delete(ids=existing)
-
-    count = 0
-    with session_scope() as db:
-        floats = db.query(FloatMetadata).all()
-        ids, docs, metadatas = [], [], []
-        for f in floats:
-            ids.append(f"float::{f.wmo_id}")
-            docs.append(_float_summary(f))
-            metadatas.append({"wmo_id": f.wmo_id, "is_bgc": f.is_bgc, "status": f.status})
-            count += 1
-
-            if len(ids) >= batch_size:
-                collection.add(ids=ids, documents=docs, metadatas=metadatas)
-                ids, docs, metadatas = [], [], []
-
-        if ids:
-            collection.add(ids=ids, documents=docs, metadatas=metadatas)
-
-    logger.info("Embedded %d float summaries", count)
-    return count
+    return embed_schema_docs(force=True)
 
 
-def embed_all() -> None:
-    n_schema = embed_schema_docs()
-    n_floats = embed_float_summaries()
-    logger.info("Vector store ready: %d schema chunks, %d float summaries", n_schema, n_floats)
+def embed_schema_docs(force: bool = False) -> int:
+    """Embed all schema doc markdown files. Pass force=True to re-embed."""
+    client = get_chroma_client()
+
+    if not force and client.count() > 0:
+        logger.info("Skipping embed — %d docs already in store.", client.count())
+        return 0
+
+    md_files = sorted(SCHEMA_DOCS_DIR.glob("*.md"))
+    if not md_files:
+        logger.warning("No markdown files found in %s", SCHEMA_DOCS_DIR)
+        return 0
+
+    documents: list[str] = []
+    ids: list[str] = []
+
+    for md_file in md_files:
+        text = md_file.read_text(encoding="utf-8")
+        chunks = _chunk_text(text)
+        for i, chunk in enumerate(chunks):
+            documents.append(chunk)
+            ids.append(f"{md_file.stem}_{i}")
+
+    client.upsert(documents=documents, ids=ids)
+    logger.info("Embedded %d chunks from %d schema doc files.", len(documents), len(md_files))
+    return len(documents)
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    embed_all()
+    n = embed_schema_docs(force=True)
+    print(f"Embedded {n} document chunks.")

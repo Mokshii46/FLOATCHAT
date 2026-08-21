@@ -1,168 +1,163 @@
 """
-Decides how to turn a natural-language question into SQL:
+Query router — decides whether to use a pre-built SQL template or fall
+back to LLM-based NL2SQL generation.
 
-  1. Try to match it against a hardcoded template (template_queries.py) and
-     extract the params that template needs straight from the text (WMO
-     ids, named regions, dates, depth). Fast, deterministic, demo-safe.
-  2. If no template scores well enough OR a matched template is missing a
-     required param, fall back to freeform NL2SQL (query_generator.py).
-
-This is intentionally simple regex/keyword matching rather than another
-LLM call — the whole point of templates is to be a fast, cheap, reliable
-path that doesn't depend on the LLM being available.
+Routing logic
+-------------
+1. Tokenise the user question (lowercase, remove punctuation).
+2. For each template, check if ALL words in any of its keyword sets appear
+   in the question tokens.
+3. If a template matches, attempt to fill its parameters.
+4. If parameter extraction succeeds, return the filled SQL (fast path).
+5. Otherwise fall back to query_generator.generate_sql (LLM path).
 """
 
 from __future__ import annotations
 
-import logging
 import re
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from config import settings
-from nl2sql.template_queries import TEMPLATES, Template
-from nl2sql import query_generator
+from nl2sql.template_queries import TEMPLATES
+from nl2sql.sql_validator import validate, SQLValidationError
+from utils.geo_utils import region_to_bbox, REGION_BOUNDS
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-# Rough bounding boxes [lon_min, lon_max, lat_min, lat_max] for regions users
-# are likely to name when talking about Indian Ocean ARGO data. Extend as needed.
-REGION_BBOXES: dict[str, list[float]] = {
-    "indian ocean": [20, 120, -40, 30],
-    "arabian sea": [50, 78, 5, 25],
-    "bay of bengal": [78, 100, 5, 22],
-    "andaman sea": [92, 100, 5, 15],
-    "equator": [40, 100, -5, 5],
-    "equatorial indian ocean": [40, 100, -5, 5],
-    "southern ocean": [20, 120, -60, -40],
-    "red sea": [32, 44, 12, 30],
-    "persian gulf": [48, 57, 24, 30],
-    "off mumbai": [70, 74, 15, 20],
-    "off chennai": [78, 84, 10, 16],
-}
+# ── Default parameter values ──────────────────────────────────────
 
-WMO_ID_RE = re.compile(r"\b\d{6,9}\b")
-DEPTH_M_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:m\b|meters|metres|dbar)", re.IGNORECASE)
-YEAR_RE = re.compile(r"\b(19|20)\d{2}\b")
-MONTH_NAMES = {
-    m.lower(): i
-    for i, m in enumerate(
-        ["", "January", "February", "March", "April", "May", "June",
-         "July", "August", "September", "October", "November", "December"]
-    ) if m
-}
+def _default_dates() -> tuple[str, str]:
+    end = datetime.utcnow()
+    start = end - timedelta(days=365 * 3)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
-@dataclass
-class RouteResult:
-    mode: str            # "template" | "freeform"
-    sql: str
-    params: dict = field(default_factory=dict)
-    template_key: str | None = None
-    explanation: str = ""
+def _extract_wmo(text: str) -> str | None:
+    """Extract a 7-digit WMO id from text."""
+    match = re.search(r"\b(\d{7})\b", text)
+    return match.group(1) if match else None
 
 
-def _find_region_bbox(question: str) -> list[float] | None:
-    q = question.lower()
-    # longest name first so "bay of bengal" wins over a generic substring
-    for name in sorted(REGION_BBOXES, key=len, reverse=True):
-        if name in q:
-            return REGION_BBOXES[name]
+def _extract_cycle(text: str) -> int | None:
+    """Extract a cycle number like 'cycle 45' or '#45'."""
+    match = re.search(r"\bcycle\s*#?\s*(\d+)\b", text, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    match = re.search(r"#(\d+)\b", text)
+    if match:
+        return int(match.group(1))
     return None
 
 
-def _find_date_range(question: str) -> tuple[datetime, datetime] | None:
-    q = question.lower()
-    year_match = YEAR_RE.search(q)
-    year = int(year_match.group()) if year_match else datetime.utcnow().year
-
-    for name, num in MONTH_NAMES.items():
-        if name in q:
-            start = datetime(year, num, 1)
-            end = datetime(year + 1, 1, 1) if num == 12 else datetime(year, num + 1, 1)
-            return start, end
-
-    if "last year" in q:
-        end = datetime.utcnow()
-        return end - timedelta(days=365), end
-    if "last month" in q:
-        end = datetime.utcnow()
-        return end - timedelta(days=30), end
-    if year_match:
-        return datetime(year, 1, 1), datetime(year + 1, 1, 1)
-
+def _detect_region(text: str) -> tuple[float, float, float, float] | None:
+    """Return bounding box if a named region is mentioned."""
+    text_lower = text.lower()
+    for alias, key in {
+        "arabian sea": "arabian_sea",
+        "bay of bengal": "bay_of_bengal",
+        "indian ocean": "indian_ocean",
+        "arabian": "arabian_sea",
+        "bengal": "bay_of_bengal",
+        "lakshadweep": "lakshadweep",
+        "andaman": "andaman_sea",
+        "persian gulf": "persian_gulf",
+    }.items():
+        if alias in text_lower:
+            return REGION_BOUNDS.get(key)
     return None
 
 
-def _find_depth_range(question: str) -> tuple[float, float] | None:
-    q = question.lower()
-    if "surface" in q:
-        return 0, 20
-    if "shallow" in q:
-        return 0, 200
-    if "deep" in q or "deepest" in q:
-        return 1000, 6000
-    m = DEPTH_M_RE.search(q)
-    if m:
-        depth = float(m.group(1))
-        return max(depth - 50, 0), depth + 50
-    return None
+def _fill_params(template: dict, question: str) -> dict | None:
+    """
+    Attempt to fill template parameters from the question text.
+    Returns a dict of params on success, None if required params are missing.
+    """
+    params = template["params"]
+    filled: dict = {}
+
+    date_start, date_end = _default_dates()
+    bbox = _detect_region(question) or (-60.0, 30.0, 20.0, 120.0)  # default: Indian Ocean
+    lat_min, lat_max, lon_min, lon_max = bbox
+
+    for p in params:
+        if p == "lat_min":   filled[p] = lat_min
+        elif p == "lat_max": filled[p] = lat_max
+        elif p == "lon_min": filled[p] = lon_min
+        elif p == "lon_max": filled[p] = lon_max
+        elif p == "date_start": filled[p] = date_start
+        elif p == "date_end":   filled[p] = date_end
+        elif p == "p_min":   filled[p] = 0
+        elif p == "p_max":   filled[p] = 2000
+        elif p == "wmo_id":
+            wmo = _extract_wmo(question)
+            if wmo is None:
+                return None     # required but not found
+            filled[p] = wmo
+        elif p == "wmo_id_1":
+            wmos = re.findall(r"\b(\d{7})\b", question)
+            if len(wmos) < 2:
+                return None
+            filled["wmo_id_1"] = wmos[0]
+            filled["wmo_id_2"] = wmos[1]
+        elif p == "wmo_id_2":
+            pass  # already filled above
+        elif p == "cycle_number":
+            cycle = _extract_cycle(question)
+            if cycle is None:
+                return None
+            filled[p] = cycle
+
+    return filled
 
 
-def _find_wmo_ids(question: str) -> list[str]:
-    return WMO_ID_RE.findall(question)
+def _tokenise(text: str) -> set[str]:
+    return set(re.sub(r"[^\w\s]", " ", text.lower()).split())
 
 
-def _score_template(t: Template, question: str) -> int:
-    q = question.lower()
-    return sum(1 for kw in t.keywords if kw in q)
+def route(question: str) -> dict:
+    """
+    Route a question to either a template or LLM NL2SQL.
 
+    Returns a dict:
+        {
+          "source":   "template" | "llm",
+          "sql":      "<validated SQL>",
+          "template": <template dict> | None,
+          "params":   <filled params dict> | None,
+        }
+    """
+    tokens = _tokenise(question)
 
-def _try_extract_params(t: Template, question: str) -> dict | None:
-    params: dict = {"row_limit": settings.max_result_rows}
-    wmo_ids = _find_wmo_ids(question)
-    bbox = _find_region_bbox(question)
-    date_range = _find_date_range(question)
-    depth_range = _find_depth_range(question)
+    for tmpl in TEMPLATES:
+        for keyword_set in tmpl["keywords"]:
+            if keyword_set.issubset(tokens):
+                params = _fill_params(tmpl, question)
+                if params is not None:
+                    try:
+                        raw_sql = tmpl["sql"].format(**params)
+                        validated_sql = validate(raw_sql)
+                        logger.info("Template match: %s", tmpl["id"])
+                        return {
+                            "source": "template",
+                            "sql": validated_sql,
+                            "template": tmpl,
+                            "params": params,
+                        }
+                    except (KeyError, SQLValidationError) as e:
+                        logger.warning("Template '%s' fill failed: %s", tmpl["id"], e)
 
-    for p in t.required_params:
-        if p == "wmo_id" and wmo_ids:
-            params["wmo_id"] = wmo_ids[0]
-        elif p == "wmo_id_a" and len(wmo_ids) >= 1:
-            params["wmo_id_a"] = wmo_ids[0]
-        elif p == "wmo_id_b" and len(wmo_ids) >= 2:
-            params["wmo_id_b"] = wmo_ids[1]
-        elif p in ("lon_min", "lon_max", "lat_min", "lat_max") and bbox:
-            params["lon_min"], params["lon_max"], params["lat_min"], params["lat_max"] = bbox
-        elif p in ("start_date", "end_date") and date_range:
-            params["start_date"], params["end_date"] = date_range
-        elif p in ("pressure_min", "pressure_max") and depth_range:
-            params["pressure_min"], params["pressure_max"] = depth_range
-        elif p == "pressure_max" and depth_range:
-            params["pressure_max"] = depth_range[1]
-        else:
-            return None  # required param not found in the question — bail on this template
+    # Fall through to LLM
+    logger.info("No template matched — using LLM NL2SQL.")
+    from vectorstore.chroma_client import get_chroma_client
+    from nl2sql.query_generator import generate_sql
 
-    return params
+    schema_context = get_chroma_client().get_relevant_context(question)
+    raw_sql = generate_sql(question, schema_context)
+    validated_sql = validate(raw_sql)
 
-
-def route(question: str) -> RouteResult:
-    candidates = sorted(TEMPLATES.values(), key=lambda t: _score_template(t, question), reverse=True)
-
-    for t in candidates:
-        if _score_template(t, question) == 0:
-            break  # no more plausible matches, everything below also scores 0
-        params = _try_extract_params(t, question)
-        if params is not None:
-            logger.info("Matched template '%s' for question: %r", t.key, question)
-            return RouteResult(
-                mode="template",
-                sql=t.sql,
-                params=params,
-                template_key=t.key,
-                explanation=f"Matched template '{t.key}': {t.description}",
-            )
-
-    logger.info("No template matched, falling back to freeform NL2SQL for: %r", question)
-    sql, explanation = query_generator.generate_sql(question)
-    return RouteResult(mode="freeform", sql=sql, params={}, explanation=explanation)
+    return {
+        "source": "llm",
+        "sql": validated_sql,
+        "template": None,
+        "params": None,
+    }

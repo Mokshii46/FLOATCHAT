@@ -15,9 +15,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg2://floatchat:floatchat@localhost:5432/floatchat"
 
     # LLM
-    llm_provider: str = "anthropic"
+    llm_provider: str = "groq"
     llm_api_key: str = ""
-    llm_model: str = "claude-sonnet-4-6"
+    groq_api_key: str = ""
+    llm_model: str = "llama-3.3-70b-versatile"
     embedding_model: str = "all-MiniLM-L6-v2"
 
     # Vector store

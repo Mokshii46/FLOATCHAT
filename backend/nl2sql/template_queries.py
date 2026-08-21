@@ -1,347 +1,315 @@
 """
-Hardcoded, parameterized SQL templates for the question types we expect
-most often. These are matched first (see router.py) because they're fast,
-deterministic, and can't hallucinate a bad column name — freeform NL2SQL
-(query_generator.py) is only used when nothing here fits.
+~15 hardcoded SQL templates for the most common ARGO question types.
 
-Every template:
-  - is a plain string with SQLAlchemy-style named bind params (`:param`)
-  - only ever SELECTs (still re-checked by sql_validator.py before execution)
-  - includes its own LIMIT, but sql_validator.py enforces a hard cap anyway
-
-`required_params` lists the bind params router.py MUST have extracted from
-the question for this template to be usable; if any are missing, router.py
-falls back to freeform NL2SQL instead of guessing.
+Each template is a dict with:
+  - keywords : list of trigger keyword sets (any set fully matching → route here)
+  - sql       : parameterised SQL using Python str.format() placeholders
+  - params    : list of required parameter names
+  - description : human-readable label (shown in ExplainabilityPanel)
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+TEMPLATES: list[dict] = [
 
+    # 1. Average SST in a region
+    {
+        "id": "avg_sst_region",
+        "description": "Average sea surface temperature in a geographic region",
+        "keywords": [{"temperature", "average", "region"}, {"sst", "region"},
+                     {"temperature", "mean"}],
+        "sql": """
+SELECT
+    DATE_TRUNC('month', timestamp) AS month,
+    ROUND(AVG(temperature)::numeric, 3) AS avg_temp_c,
+    COUNT(*) AS n_obs
+FROM profiles
+WHERE lat BETWEEN {lat_min} AND {lat_max}
+  AND lon BETWEEN {lon_min} AND {lon_max}
+  AND pressure BETWEEN 0 AND 10
+  AND timestamp BETWEEN '{date_start}' AND '{date_end}'
+GROUP BY month
+ORDER BY month
+LIMIT 5000;
+""",
+        "params": ["lat_min", "lat_max", "lon_min", "lon_max", "date_start", "date_end"],
+    },
 
-@dataclass
-class Template:
-    key: str
-    description: str
-    sql: str
-    required_params: list[str]
-    keywords: list[str]  # used by router.py's keyword scoring
+    # 2. Salinity in a region over time
+    {
+        "id": "salinity_region",
+        "description": "Average salinity in a geographic region over time",
+        "keywords": [{"salinity", "region"}, {"salinity", "ocean"},
+                     {"salinity", "sea"}, {"salinity", "bay"}, {"salinity", "gulf"}],
+        "sql": """
+SELECT
+    DATE_TRUNC('month', timestamp) AS month,
+    ROUND(AVG(salinity)::numeric, 4) AS avg_salinity_psu,
+    COUNT(*) AS n_obs
+FROM profiles
+WHERE lat BETWEEN {lat_min} AND {lat_max}
+  AND lon BETWEEN {lon_min} AND {lon_max}
+  AND timestamp BETWEEN '{date_start}' AND '{date_end}'
+GROUP BY month
+ORDER BY month
+LIMIT 5000;
+""",
+        "params": ["lat_min", "lat_max", "lon_min", "lon_max", "date_start", "date_end"],
+    },
 
+    # 3. Float trajectory
+    {
+        "id": "float_trajectory",
+        "description": "Surfacing path of a specific float",
+        "keywords": [{"trajectory", "float"}, {"path", "float"}, {"track", "float"},
+                     {"position", "float"}, {"movement", "float"}],
+        "sql": """
+SELECT tp.cycle_number, tp.timestamp, tp.lat, tp.lon,
+       tp.predicted_next_lat, tp.predicted_next_lon
+FROM trajectory_points tp
+JOIN float_metadata fm ON tp.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+ORDER BY tp.cycle_number
+LIMIT 5000;
+""",
+        "params": ["wmo_id"],
+    },
 
-TEMPLATES: dict[str, Template] = {}
+    # 4. Depth profile (T/S vs pressure) for a float cycle
+    {
+        "id": "depth_profile",
+        "description": "Temperature/salinity vs depth for a specific float and cycle",
+        "keywords": [{"depth", "profile"}, {"pressure", "temperature"},
+                     {"profile", "float"}, {"depth", "float"}],
+        "sql": """
+SELECT p.pressure, p.temperature, p.salinity,
+       p.temperature_qc, p.salinity_qc, p.timestamp
+FROM profiles p
+JOIN float_metadata fm ON p.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+  AND p.cycle_number = {cycle_number}
+ORDER BY p.pressure
+LIMIT 5000;
+""",
+        "params": ["wmo_id", "cycle_number"],
+    },
 
+    # 5. Compare two floats
+    {
+        "id": "compare_floats",
+        "description": "Mean temperature vs depth for two floats",
+        "keywords": [{"compare", "float"}, {"compare", "wmo"},
+                     {"difference", "float"}, {"versus", "float"}],
+        "sql": """
+SELECT fm.wmo_id,
+       ROUND(p.pressure / 100) * 100 AS pressure_bin,
+       ROUND(AVG(p.temperature)::numeric, 3) AS avg_temp,
+       ROUND(AVG(p.salinity)::numeric, 4) AS avg_sal
+FROM profiles p
+JOIN float_metadata fm ON p.float_id = fm.id
+WHERE fm.wmo_id IN ('{wmo_id_1}', '{wmo_id_2}')
+GROUP BY fm.wmo_id, pressure_bin
+ORDER BY fm.wmo_id, pressure_bin
+LIMIT 5000;
+""",
+        "params": ["wmo_id_1", "wmo_id_2"],
+    },
 
-def _register(t: Template) -> None:
-    TEMPLATES[t.key] = t
+    # 6. List active floats
+    {
+        "id": "list_active_floats",
+        "description": "List of all active floats",
+        "keywords": [{"list", "float"}, {"active", "float"}, {"all", "float"},
+                     {"floats", "active"}, {"available", "float"}],
+        "sql": """
+SELECT wmo_id, dac, platform_type, deploy_date,
+       deploy_lat, deploy_lon, is_bgc, status
+FROM float_metadata
+WHERE status = 'active'
+ORDER BY deploy_date DESC
+LIMIT 5000;
+""",
+        "params": [],
+    },
 
+    # 7. BGC — chlorophyll profile
+    {
+        "id": "chlorophyll_profile",
+        "description": "Chlorophyll-a concentration vs depth for a BGC float",
+        "keywords": [{"chlorophyll", "depth"}, {"chlorophyll", "profile"},
+                     {"chla", "depth"}, {"algae", "depth"}],
+        "sql": """
+SELECT b.pressure, b.chlorophyll, b.chlorophyll_qc,
+       b.timestamp, b.lat, b.lon
+FROM bgc_profiles b
+JOIN float_metadata fm ON b.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+  AND b.chlorophyll IS NOT NULL
+ORDER BY b.pressure
+LIMIT 5000;
+""",
+        "params": ["wmo_id"],
+    },
 
-# 1. Avg temperature/salinity in a region + date range, at ~a given depth
-_register(
-    Template(
-        key="avg_var_region_depth",
-        description="Average temperature/salinity in a region and date range, near a given pressure/depth.",
-        sql="""
-            SELECT date_trunc('month', p.timestamp) AS month,
-                   AVG(p.temperature) AS avg_temperature,
-                   AVG(p.salinity) AS avg_salinity,
-                   COUNT(*) AS n_obs
-            FROM profiles p
-            WHERE p.lon BETWEEN :lon_min AND :lon_max
-              AND p.lat BETWEEN :lat_min AND :lat_max
-              AND p.timestamp BETWEEN :start_date AND :end_date
-              AND p.pressure BETWEEN :pressure_min AND :pressure_max
-            GROUP BY 1
-            ORDER BY 1
-            LIMIT :row_limit
-        """,
-        required_params=["lon_min", "lon_max", "lat_min", "lat_max", "start_date", "end_date", "pressure_min", "pressure_max"],
-        keywords=["average", "mean", "temperature", "salinity", "region", "depth"],
-    )
+    # 8. BGC — dissolved oxygen trend
+    {
+        "id": "oxygen_trend",
+        "description": "Dissolved oxygen trend at a depth range in a region",
+        "keywords": [{"oxygen", "trend"}, {"dissolved", "oxygen"},
+                     {"o2", "depth"}, {"hypoxia"}],
+        "sql": """
+SELECT DATE_TRUNC('month', b.timestamp) AS month,
+       AVG(b.dissolved_oxygen) AS avg_oxygen_umolkg
+FROM bgc_profiles b
+WHERE b.lat BETWEEN {lat_min} AND {lat_max}
+  AND b.lon BETWEEN {lon_min} AND {lon_max}
+  AND b.pressure BETWEEN {p_min} AND {p_max}
+GROUP BY month
+ORDER BY month
+LIMIT 5000;
+""",
+        "params": ["lat_min", "lat_max", "lon_min", "lon_max", "p_min", "p_max"],
+    },
+
+    # 9. BGC — list BGC floats
+    {
+        "id": "list_bgc_floats",
+        "description": "List all active BGC floats",
+        "keywords": [{"bgc", "float"}, {"biogeochemical"}, {"bgc", "list"},
+                     {"oxygen", "float"}, {"chlorophyll", "float"}],
+        "sql": """
+SELECT wmo_id, dac, platform_type, deploy_date,
+       deploy_lat, deploy_lon
+FROM float_metadata
+WHERE is_bgc = true AND status = 'active'
+ORDER BY deploy_date DESC
+LIMIT 5000;
+""",
+        "params": [],
+    },
+
+    # 10. Temperature anomaly vs long-term mean
+    {
+        "id": "temp_anomaly",
+        "description": "Monthly temperature anomaly relative to long-term mean",
+        "keywords": [{"anomaly", "temperature"}, {"warming", "trend"},
+                     {"temperature", "change"}, {"heat", "anomaly"}],
+        "sql": """
+WITH monthly AS (
+    SELECT DATE_TRUNC('month', timestamp) AS month,
+           ROUND(AVG(temperature)::numeric, 3) AS avg_temp
+    FROM profiles
+    WHERE lat BETWEEN {lat_min} AND {lat_max}
+      AND lon BETWEEN {lon_min} AND {lon_max}
+      AND pressure BETWEEN 0 AND 10
+    GROUP BY month
+),
+long_term AS (
+    SELECT AVG(avg_temp) AS climatology FROM monthly
 )
+SELECT m.month,
+       m.avg_temp,
+       ROUND((m.avg_temp - lt.climatology)::numeric, 3) AS anomaly
+FROM monthly m, long_term lt
+ORDER BY m.month
+LIMIT 5000;
+""",
+        "params": ["lat_min", "lat_max", "lon_min", "lon_max"],
+    },
 
-# 2. Trend over time in a region (no depth filter — surface-ish default)
-_register(
-    Template(
-        key="trend_region",
-        description="Monthly temperature/salinity trend in a region over a date range.",
-        sql="""
-            SELECT date_trunc('month', p.timestamp) AS month,
-                   AVG(p.temperature) AS avg_temperature,
-                   AVG(p.salinity) AS avg_salinity
-            FROM profiles p
-            WHERE p.lon BETWEEN :lon_min AND :lon_max
-              AND p.lat BETWEEN :lat_min AND :lat_max
-              AND p.timestamp BETWEEN :start_date AND :end_date
-              AND p.pressure <= :pressure_max
-            GROUP BY 1
-            ORDER BY 1
-            LIMIT :row_limit
-        """,
-        required_params=["lon_min", "lon_max", "lat_min", "lat_max", "start_date", "end_date", "pressure_max"],
-        keywords=["trend", "over time", "warming", "cooling", "change", "region"],
-    )
-)
+    # 11. Floats in a bounding box
+    {
+        "id": "floats_in_region",
+        "description": "Floats observed in a geographic bounding box",
+        "keywords": [{"float", "region"}, {"float", "area"}, {"float", "location"},
+                     {"float", "bay"}, {"float", "arabian"}, {"float", "bengal"}],
+        "sql": """
+SELECT DISTINCT fm.wmo_id, fm.dac, fm.platform_type, fm.is_bgc,
+       tp.lat, tp.lon, tp.timestamp
+FROM trajectory_points tp
+JOIN float_metadata fm ON tp.float_id = fm.id
+WHERE tp.lat BETWEEN {lat_min} AND {lat_max}
+  AND tp.lon BETWEEN {lon_min} AND {lon_max}
+  AND tp.timestamp BETWEEN '{date_start}' AND '{date_end}'
+ORDER BY tp.timestamp DESC
+LIMIT 5000;
+""",
+        "params": ["lat_min", "lat_max", "lon_min", "lon_max", "date_start", "date_end"],
+    },
 
-# 3. Compare two named floats (by wmo_id)
-_register(
-    Template(
-        key="compare_floats",
-        description="Compare temperature/salinity profiles between two specific floats.",
-        sql="""
-            SELECT fm.wmo_id, p.cycle_number, p.pressure, p.temperature, p.salinity, p.timestamp
-            FROM profiles p
-            JOIN float_metadata fm ON fm.id = p.float_id
-            WHERE fm.wmo_id IN (:wmo_id_a, :wmo_id_b)
-            ORDER BY fm.wmo_id, p.cycle_number, p.pressure
-            LIMIT :row_limit
-        """,
-        required_params=["wmo_id_a", "wmo_id_b"],
-        keywords=["compare", "vs", "versus", "float", "floats"],
-    )
-)
+    # 12. Thermocline depth (max temperature gradient)
+    {
+        "id": "thermocline_depth",
+        "description": "Approximate thermocline depth for a float cycle",
+        "keywords": [{"thermocline"}, {"mixed layer"}, {"mld"}, {"thermocline", "depth"}],
+        "sql": """
+SELECT p.pressure AS thermocline_depth_dbar
+FROM (
+    SELECT pressure, temperature,
+           temperature - LAG(temperature) OVER (ORDER BY pressure) AS dt
+    FROM profiles p
+    JOIN float_metadata fm ON p.float_id = fm.id
+    WHERE fm.wmo_id = '{wmo_id}'
+      AND p.cycle_number = {cycle_number}
+      AND p.temperature IS NOT NULL
+    ORDER BY pressure
+) sub
+ORDER BY ABS(dt) DESC NULLS LAST
+LIMIT 1;
+""",
+        "params": ["wmo_id", "cycle_number"],
+    },
 
-# 4. Single float's full depth profile for its latest cycle
-_register(
-    Template(
-        key="float_latest_profile",
-        description="Depth profile (temperature/salinity vs pressure) for a float's most recent cycle.",
-        sql="""
-            SELECT p.pressure, p.temperature, p.salinity, p.timestamp
-            FROM profiles p
-            JOIN float_metadata fm ON fm.id = p.float_id
-            WHERE fm.wmo_id = :wmo_id
-              AND p.cycle_number = (
-                  SELECT MAX(cycle_number) FROM profiles p2
-                  JOIN float_metadata fm2 ON fm2.id = p2.float_id
-                  WHERE fm2.wmo_id = :wmo_id
-              )
-            ORDER BY p.pressure
-            LIMIT :row_limit
-        """,
-        required_params=["wmo_id"],
-        keywords=["profile", "depth", "latest", "recent", "float"],
-    )
-)
+    # 13. Float summary (latest cycle)
+    {
+        "id": "float_summary",
+        "description": "Latest cycle summary for a specific float",
+        "keywords": [{"float", "summary"}, {"float", "latest"}, {"float", "last"},
+                     {"float", "recent"}, {"float", "current"}],
+        "sql": """
+SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.status,
+       tp.cycle_number, tp.timestamp, tp.lat, tp.lon,
+       tp.predicted_next_lat, tp.predicted_next_lon
+FROM trajectory_points tp
+JOIN float_metadata fm ON tp.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+ORDER BY tp.cycle_number DESC
+LIMIT 1;
+""",
+        "params": ["wmo_id"],
+    },
 
-# 5. Where is a float right now (most recent surfacing position)
-_register(
-    Template(
-        key="float_current_position",
-        description="Most recent known surfacing position of a float, plus predicted next position if available.",
-        sql="""
-            SELECT fm.wmo_id, tp.timestamp, tp.lat, tp.lon,
-                   tp.predicted_next_lat, tp.predicted_next_lon, tp.prediction_confidence
-            FROM trajectory_points tp
-            JOIN float_metadata fm ON fm.id = tp.float_id
-            WHERE fm.wmo_id = :wmo_id
-            ORDER BY tp.timestamp DESC
-            LIMIT 1
-        """,
-        required_params=["wmo_id"],
-        keywords=["where", "current", "position", "location", "now", "float"],
-    )
-)
+    # 14. Nitrate profile (BGC)
+    {
+        "id": "nitrate_profile",
+        "description": "Nitrate concentration vs depth for a BGC float",
+        "keywords": [{"nitrate", "depth"}, {"nitrate", "profile"}, {"no3", "depth"}],
+        "sql": """
+SELECT b.pressure, b.nitrate, b.nitrate_qc
+FROM bgc_profiles b
+JOIN float_metadata fm ON b.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+  AND b.nitrate IS NOT NULL
+ORDER BY b.pressure
+LIMIT 5000;
+""",
+        "params": ["wmo_id"],
+    },
 
-# 6. Full trajectory (path) of a float
-_register(
-    Template(
-        key="float_trajectory",
-        description="Full surfacing-position history of a float, ordered by time.",
-        sql="""
-            SELECT tp.cycle_number, tp.timestamp, tp.lat, tp.lon
-            FROM trajectory_points tp
-            JOIN float_metadata fm ON fm.id = tp.float_id
-            WHERE fm.wmo_id = :wmo_id
-            ORDER BY tp.cycle_number
-            LIMIT :row_limit
-        """,
-        required_params=["wmo_id"],
-        keywords=["path", "trajectory", "route", "track", "float"],
-    )
-)
-
-# 7. Count / list floats in a region
-_register(
-    Template(
-        key="floats_in_region",
-        description="Floats whose most recent known position falls inside a region.",
-        sql="""
-            SELECT DISTINCT ON (fm.wmo_id) fm.wmo_id, fm.platform_type, fm.is_bgc, tp.timestamp, tp.lat, tp.lon
-            FROM trajectory_points tp
-            JOIN float_metadata fm ON fm.id = tp.float_id
-            WHERE tp.lon BETWEEN :lon_min AND :lon_max
-              AND tp.lat BETWEEN :lat_min AND :lat_max
-            ORDER BY fm.wmo_id, tp.timestamp DESC
-            LIMIT :row_limit
-        """,
-        required_params=["lon_min", "lon_max", "lat_min", "lat_max"],
-        keywords=["how many", "floats", "region", "in the", "near"],
-    )
-)
-
-# 8. BGC variable in a region (USP 7)
-_register(
-    Template(
-        key="bgc_region",
-        description="Average BGC variable (oxygen/chlorophyll/pH/nitrate) in a region and date range.",
-        sql="""
-            SELECT date_trunc('month', b.timestamp) AS month,
-                   AVG(b.dissolved_oxygen) AS avg_oxygen,
-                   AVG(b.chlorophyll) AS avg_chlorophyll,
-                   AVG(b.ph) AS avg_ph,
-                   AVG(b.nitrate) AS avg_nitrate,
-                   COUNT(*) AS n_obs
-            FROM bgc_profiles b
-            WHERE b.lon BETWEEN :lon_min AND :lon_max
-              AND b.lat BETWEEN :lat_min AND :lat_max
-              AND b.timestamp BETWEEN :start_date AND :end_date
-            GROUP BY 1
-            ORDER BY 1
-            LIMIT :row_limit
-        """,
-        required_params=["lon_min", "lon_max", "lat_min", "lat_max", "start_date", "end_date"],
-        keywords=["oxygen", "chlorophyll", "ph", "nitrate", "bgc", "biogeochemical"],
-    )
-)
-
-# 9. Deepest / shallowest reading for a float
-_register(
-    Template(
-        key="float_extreme_depth",
-        description="Deepest (max pressure) profile reading recorded by a float.",
-        sql="""
-            SELECT p.cycle_number, p.pressure, p.temperature, p.salinity, p.timestamp
-            FROM profiles p
-            JOIN float_metadata fm ON fm.id = p.float_id
-            WHERE fm.wmo_id = :wmo_id
-            ORDER BY p.pressure DESC
-            LIMIT :row_limit
-        """,
-        required_params=["wmo_id"],
-        keywords=["deepest", "maximum depth", "float"],
-    )
-)
-
-# 10. List/count BGC floats (metadata only, no measurement filter)
-_register(
-    Template(
-        key="list_bgc_floats",
-        description="List all floats flagged as BGC-equipped, optionally filtered by DAC.",
-        sql="""
-            SELECT wmo_id, dac, platform_type, project_name, status
-            FROM float_metadata
-            WHERE is_bgc = TRUE
-            ORDER BY wmo_id
-            LIMIT :row_limit
-        """,
-        required_params=[],
-        keywords=["bgc floats", "list floats", "which floats", "biogeochemical floats"],
-    )
-)
-
-# 11. Float metadata lookup (who deployed it, when, platform type)
-_register(
-    Template(
-        key="float_metadata_lookup",
-        description="Metadata for a single float: PI, project, deploy date/location, platform type.",
-        sql="""
-            SELECT wmo_id, dac, platform_type, project_name, pi_name,
-                   deploy_date, deploy_lat, deploy_lon, is_bgc, status
-            FROM float_metadata
-            WHERE wmo_id = :wmo_id
-        """,
-        required_params=["wmo_id"],
-        keywords=["who deployed", "when was", "pi", "project", "float"],
-    )
-)
-
-# 12. Active vs dead float counts
-_register(
-    Template(
-        key="float_status_counts",
-        description="Count of floats by status (active/dead/unknown).",
-        sql="""
-            SELECT status, COUNT(*) AS n_floats
-            FROM float_metadata
-            GROUP BY status
-            ORDER BY n_floats DESC
-        """,
-        required_params=[],
-        keywords=["how many floats", "active floats", "dead floats", "status"],
-    )
-)
-
-# 13. Salinity/temperature at surface (shallow) in a region, single snapshot
-_register(
-    Template(
-        key="surface_snapshot_region",
-        description="Most recent surface-level (pressure < 20 dbar) readings in a region.",
-        sql="""
-            SELECT fm.wmo_id, p.timestamp, p.lat, p.lon, p.pressure, p.temperature, p.salinity
-            FROM profiles p
-            JOIN float_metadata fm ON fm.id = p.float_id
-            WHERE p.lon BETWEEN :lon_min AND :lon_max
-              AND p.lat BETWEEN :lat_min AND :lat_max
-              AND p.pressure < 20
-            ORDER BY p.timestamp DESC
-            LIMIT :row_limit
-        """,
-        required_params=["lon_min", "lon_max", "lat_min", "lat_max"],
-        keywords=["surface", "sea surface", "region", "current"],
-    )
-)
-
-# 14. Cycles per float (data density check)
-_register(
-    Template(
-        key="float_cycle_count",
-        description="Number of cycles recorded for a float — useful for 'how much data do we have'.",
-        sql="""
-            SELECT fm.wmo_id, COUNT(DISTINCT p.cycle_number) AS n_cycles,
-                   MIN(p.timestamp) AS first_cycle, MAX(p.timestamp) AS last_cycle
-            FROM profiles p
-            JOIN float_metadata fm ON fm.id = p.float_id
-            WHERE fm.wmo_id = :wmo_id
-            GROUP BY fm.wmo_id
-        """,
-        required_params=["wmo_id"],
-        keywords=["how many cycles", "how much data", "float"],
-    )
-)
-
-# 15. Anomalous readings — simple threshold-based outlier scan in a region (feeds USP 1's raw data)
-_register(
-    Template(
-        key="temperature_outliers_region",
-        description="Profile rows in a region/date range whose temperature is furthest from the region's mean (candidate anomalies).",
-        sql="""
-            WITH stats AS (
-                SELECT AVG(temperature) AS mean_t, STDDEV(temperature) AS std_t
-                FROM profiles
-                WHERE lon BETWEEN :lon_min AND :lon_max
-                  AND lat BETWEEN :lat_min AND :lat_max
-                  AND timestamp BETWEEN :start_date AND :end_date
-            )
-            SELECT p.timestamp, p.lat, p.lon, p.pressure, p.temperature,
-                   ABS(p.temperature - stats.mean_t) / NULLIF(stats.std_t, 0) AS z_score
-            FROM profiles p, stats
-            WHERE p.lon BETWEEN :lon_min AND :lon_max
-              AND p.lat BETWEEN :lat_min AND :lat_max
-              AND p.timestamp BETWEEN :start_date AND :end_date
-              AND p.temperature IS NOT NULL
-            ORDER BY z_score DESC NULLS LAST
-            LIMIT :row_limit
-        """,
-        required_params=["lon_min", "lon_max", "lat_min", "lat_max", "start_date", "end_date"],
-        keywords=["anomaly", "anomalous", "unusual", "outlier", "spike"],
-    )
-)
-
-
-def render(key: str, params: dict) -> str:
-    """Returns the raw SQL string for a template (bind params substituted by the DB driver, not here)."""
-    return TEMPLATES[key].sql
-
-
-def get_template(key: str) -> Template | None:
-    return TEMPLATES.get(key)
+    # 15. pH profile (BGC)
+    {
+        "id": "ph_profile",
+        "description": "pH vs depth for a BGC float",
+        "keywords": [{"ph", "depth"}, {"ph", "profile"}, {"acidification"}],
+        "sql": """
+SELECT b.pressure, b.ph, b.ph_qc, b.timestamp
+FROM bgc_profiles b
+JOIN float_metadata fm ON b.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+  AND b.ph IS NOT NULL
+ORDER BY b.pressure
+LIMIT 5000;
+""",
+        "params": ["wmo_id"],
+    },
+]

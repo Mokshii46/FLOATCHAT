@@ -1,81 +1,94 @@
 """
-Thin wrapper around `argopy` for pulling ARGO float data by region, date
-range, or specific WMO id. Caches raw NetCDF under data/raw/ so re-runs
-during development don't re-hit the GDAC.
+ARGO data fetcher using argopy.
 
-argopy docs: https://argopy.readthedocs.io/
+Downloads float data for the Indian Ocean by region bounding box or
+specific WMO ids and caches raw NetCDF files under data/raw/.
 """
 
-from __future__ import annotations
-
-import logging
-from datetime import date, timedelta
+import os
 from pathlib import Path
+from typing import Optional
 
 import argopy
-from argopy import DataFetcher
+from argopy import DataFetcher as ArgoDataFetcher
 
 from config import settings
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
-RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
-RAW_DIR.mkdir(parents=True, exist_ok=True)
+RAW_DATA_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
+RAW_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# Rough Indian Ocean bounding box: [lon_min, lon_max, lat_min, lat_max]
-INDIAN_OCEAN_BBOX = [20, 120, -40, 30]
-
-
-def _fetcher() -> DataFetcher:
-    argopy.set_options(mode="standard")
-    return DataFetcher()
+# Indian Ocean default bounding box: lon_min, lat_min, lon_max, lat_max
+DEFAULT_BOX = [20.0, -60.0, 120.0, 30.0]
 
 
-def fetch_region(
-    bbox: list[float] | None = None,
-    lookback_years: int | None = None,
-    bgc_only: bool = False,
-) -> "xr.Dataset":  # noqa: F821 - xarray Dataset, imported lazily by argopy
+def fetch_by_region(
+    box: Optional[list[float]] = None,
+    years_back: Optional[int] = None,
+    save_nc: bool = True,
+) -> argopy.stores.ArgoIndex:
     """
-    Fetch all float profiles in a bounding box over the last N years.
+    Fetch all floats in a geographic box for the last N years.
 
-    bbox: [lon_min, lon_max, lat_min, lat_max]
+    Parameters
+    ----------
+    box        : [lon_min, lat_min, lon_max, lat_max]
+    years_back : override settings.argo_lookback_years
+    save_nc    : if True, save raw xarray dataset to data/raw/
+
+    Returns
+    -------
+    ArgoIndex with combined dataset
     """
-    bbox = bbox or INDIAN_OCEAN_BBOX
-    lookback_years = lookback_years or settings.argo_lookback_years
+    box = box or DEFAULT_BOX
+    years_back = years_back or settings.argo_lookback_years
 
-    end = date.today()
-    start = end - timedelta(days=365 * lookback_years)
+    from datetime import datetime, timedelta
 
-    logger.info("Fetching ARGO region=%s window=%s..%s bgc_only=%s", bbox, start, end, bgc_only)
+    date_end = datetime.utcnow().strftime("%Y-%m-%d")
+    date_start = (datetime.utcnow() - timedelta(days=365 * years_back)).strftime("%Y-%m-%d")
 
-    fetcher = _fetcher()
-    box = bbox + [0, 2000, start.isoformat(), end.isoformat()]  # add pressure range 0-2000 dbar
+    logger.info("Fetching ARGO data: box=%s, %s → %s", box, date_start, date_end)
 
-    if bgc_only:
-        ds = fetcher.region(box).to_xarray()  # argopy auto-detects BGC vars if present
-    else:
-        ds = fetcher.region(box).to_xarray()
+    loader = ArgoDataFetcher(src="gdac", parallel=True).region(
+        box + [date_start, date_end]
+    )
+
+    ds = loader.load().data
+    logger.info("Fetched %d profiles.", ds.dims.get("N_POINTS", 0))
+
+    if save_nc:
+        out_path = RAW_DATA_DIR / f"region_{date_start}_{date_end}.nc"
+        ds.to_netcdf(out_path)
+        logger.info("Saved raw data to %s", out_path)
 
     return ds
 
 
-def fetch_float(wmo_id: str) -> "xr.Dataset":  # noqa: F821
-    """Fetch the full profile history for a single float by WMO id."""
-    logger.info("Fetching float wmo_id=%s", wmo_id)
-    fetcher = _fetcher()
-    return fetcher.float(int(wmo_id)).to_xarray()
+def fetch_by_wmo(wmo_ids: list[str | int], save_nc: bool = True):
+    """
+    Fetch specific floats by WMO id list.
+
+    Returns xarray Dataset.
+    """
+    ids = [int(w) for w in wmo_ids]
+    logger.info("Fetching WMO ids: %s", ids)
+
+    loader = ArgoDataFetcher(src="gdac").float(ids)
+    ds = loader.load().data
+    logger.info("Fetched %d points for %d floats.", ds.dims.get("N_POINTS", 0), len(ids))
+
+    if save_nc:
+        label = "_".join(str(i) for i in ids[:5])
+        out_path = RAW_DATA_DIR / f"wmo_{label}.nc"
+        ds.to_netcdf(out_path)
+        logger.info("Saved raw data to %s", out_path)
+
+    return ds
 
 
-def save_raw(ds, name: str) -> Path:
-    """Persist a fetched xarray Dataset to data/raw/<name>.nc for ETL reuse."""
-    out_path = RAW_DIR / f"{name}.nc"
-    ds.to_netcdf(out_path)
-    logger.info("Saved raw NetCDF -> %s", out_path)
-    return out_path
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    dataset = fetch_region()
-    save_raw(dataset, "indian_ocean_recent")
+def list_cached_files() -> list[Path]:
+    """Return all .nc files in the raw data cache."""
+    return sorted(RAW_DATA_DIR.glob("*.nc"))

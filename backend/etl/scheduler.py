@@ -1,53 +1,53 @@
 """
-Periodic refresh job: re-fetches recent ARGO cycles and loads any new
-data. Run standalone (`python -m etl.scheduler`) or import `start()`
-from main.py to run inside the FastAPI process.
+APScheduler-based nightly refresh of ARGO data.
+
+The scheduler runs the full ETL pipeline (fetch → parse → QC → load)
+once per day at 02:00 UTC by default.  It is started from main.py on
+FastAPI startup.
 """
 
-from __future__ import annotations
-
-import logging
-
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
-from etl.fetch_argo import fetch_region, save_raw
-from etl.parse_netcdf import flatten_core_profile, flatten_bgc_profile, extract_float_metadata
-from etl.qc_filter import qc_filter_core, qc_filter_bgc
-from etl.load_to_db import upsert_float_metadata, load_profiles, load_bgc_profiles, load_trajectory_points
+from utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
-def refresh_job() -> None:
-    logger.info("Scheduled ARGO refresh starting")
+def run_pipeline() -> None:
+    """Full ETL run: fetch → parse → qc → load."""
+    logger.info("Scheduled ETL pipeline starting …")
     try:
-        ds = fetch_region(lookback_years=1)  # only need the recent tail for a refresh
-        save_raw(ds, "refresh_latest")
+        from etl.fetch_argo import fetch_by_region
+        from etl.parse_netcdf import parse_profiles, parse_trajectory
+        from etl.qc_filter import filter_profiles
+        from etl.load_to_db import load_profiles, load_trajectory_points
 
-        meta_df = extract_float_metadata(ds)
-        wmo_to_id = upsert_float_metadata(meta_df)
+        ds = fetch_by_region()
+        profile_rows = parse_profiles(ds)
+        traj_rows = parse_trajectory(ds)
+        profile_rows = filter_profiles(profile_rows)
 
-        core_df = qc_filter_core(flatten_core_profile(ds))
-        load_profiles(core_df, wmo_to_id)
-        load_trajectory_points(core_df, wmo_to_id)
-
-        bgc_df = qc_filter_bgc(flatten_bgc_profile(ds))
-        if not bgc_df.empty:
-            load_bgc_profiles(bgc_df, wmo_to_id)
-
-        logger.info("Scheduled ARGO refresh complete")
-    except Exception:
-        logger.exception("Scheduled ARGO refresh failed")
+        load_profiles(profile_rows)
+        load_trajectory_points(traj_rows)
+        logger.info("Scheduled ETL pipeline completed.")
+    except Exception as exc:
+        logger.error("ETL pipeline failed: %s", exc, exc_info=True)
 
 
-def start(interval_hours: int = 24) -> BackgroundScheduler:
+def start_scheduler(cron: str = "0 2 * * *") -> BackgroundScheduler:
+    """
+    Start and return a BackgroundScheduler that calls run_pipeline()
+    on the given cron expression (default: 02:00 UTC daily).
+    """
     scheduler = BackgroundScheduler()
-    scheduler.add_job(refresh_job, "interval", hours=interval_hours, id="argo_refresh")
+    scheduler.add_job(
+        run_pipeline,
+        trigger=CronTrigger.from_crontab(cron),
+        id="argo_refresh",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
-    logger.info("ARGO refresh scheduler started (every %dh)", interval_hours)
+    logger.info("Scheduler started with cron '%s'.", cron)
     return scheduler
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    refresh_job()
