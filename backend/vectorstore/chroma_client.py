@@ -8,7 +8,9 @@ are returned and injected into the LLM prompt.
 
 from __future__ import annotations
 
+# pyrefly: ignore [missing-import]
 import chromadb
+# pyrefly: ignore [missing-import]
 from chromadb.config import Settings as ChromaSettings
 
 from config import settings
@@ -43,6 +45,7 @@ class ChromaClient:
     def _get_encoder(self):
         if self._encoder is None:
             try:
+                # pyrefly: ignore [missing-import]
                 from sentence_transformers import SentenceTransformer
                 self._encoder = SentenceTransformer(settings.embedding_model)
             except Exception as exc:

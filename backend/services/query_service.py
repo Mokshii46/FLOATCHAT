@@ -6,6 +6,7 @@ Includes automatic PostgreSQL → SQLite SQL rewriting when running on SQLite.
 from __future__ import annotations
 
 import re
+# pyrefly: ignore [missing-import]
 from sqlalchemy import text
 
 from config import settings
@@ -40,6 +41,9 @@ _PG_TO_SQLITE_REWRITES: list[tuple[re.Pattern, str | callable]] = [
     # DISTINCT ON (col) ... ORDER BY col, other DESC → GROUP BY subquery (best effort)
     (re.compile(r"DISTINCT\s+ON\s*\(\s*(\w+)\s*\)", re.IGNORECASE),
      r"DISTINCT"),
+    # DATE 'YYYY-MM-DD' → 'YYYY-MM-DD'
+    (re.compile(r"\bDATE\s+'(\d{4}-\d{2}-\d{2})'", re.IGNORECASE),
+     r"'\1'"),
     # Boolean true → 1, false → 0
     (re.compile(r"\b=\s*true\b", re.IGNORECASE), "= 1"),
     (re.compile(r"\b=\s*false\b", re.IGNORECASE), "= 0"),

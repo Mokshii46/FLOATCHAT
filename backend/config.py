@@ -5,6 +5,7 @@ os.environ directly.
 """
 
 from functools import lru_cache
+# pyrefly: ignore [missing-import]
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +32,9 @@ class Settings(BaseSettings):
     # ARGO
     argo_region: str = "indian_ocean"
     argo_lookback_years: int = 3
+
+    # Argovis API (https://argovis-keygen.colorado.edu/)
+    argovis_api_key: str = ""
 
     # Voice
     stt_provider: str = "whisper"

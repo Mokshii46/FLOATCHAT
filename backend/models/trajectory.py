@@ -9,9 +9,7 @@ from datetime import datetime
 
 from sqlalchemy import ForeignKey, Integer, DateTime, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from geoalchemy2 import Geometry
-
-from database import Base
+from database import Base, SpatialPoint
 
 
 class TrajectoryPoint(Base):
@@ -24,7 +22,7 @@ class TrajectoryPoint(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     lat: Mapped[float] = mapped_column(nullable=False)
     lon: Mapped[float] = mapped_column(nullable=False)
-    geom = mapped_column(Geometry(geometry_type="POINT", srid=4326), nullable=True)
+    geom = mapped_column(SpatialPoint, nullable=True)
 
     # Filled in lazily by ml/trajectory_model.py for the most recent cycle only
     predicted_next_lat: Mapped[float] = mapped_column(nullable=True)

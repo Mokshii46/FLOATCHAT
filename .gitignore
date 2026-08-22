@@ -5,25 +5,36 @@ __pycache__/
 venv/
 *.egg-info/
 
-# Env
-.env
+# Databases (floatchat.db is 260MB+, exceeds GitHub 100MB single-file limit)
+*.db
+*.sqlite3
+floatchat.db
+backend/floatchat.db
 
-# Data
+# Secrets & Local Environment
+.env
+.env.local
+.env.*.local
+
+# Data caches & generated datasets
 data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
 data/vectorstore/
+backend/data/
 
-# Node
-frontend/node_modules/
-frontend/dist/
-
-# Model artifacts
+# ML models & artifacts (generated dynamically by train_trajectory.py)
+data/ml_models/*
+!data/ml_models/.gitkeep
 backend/ml/artifacts/*
 !backend/ml/artifacts/.gitkeep
 
-# Misc
+# Node / Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Logs & OS files
 .DS_Store
 *.log
 .ipynb_checkpoints/

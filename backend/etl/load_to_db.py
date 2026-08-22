@@ -13,8 +13,9 @@ Strategy
 from __future__ import annotations
 
 from typing import Any
-
+# pyrefly: ignore [missing-import]
 from sqlalchemy import text
+# pyrefly: ignore [missing-import]
 from sqlalchemy.orm import Session
 
 from database import session_scope
@@ -40,8 +41,10 @@ def _get_or_create_float(db: Session, wmo_id: str) -> FloatMetadata:
     return fm
 
 
+from database import session_scope, engine
+
 def _make_geom(lat: float | None, lon: float | None) -> str | None:
-    if lat is None or lon is None:
+    if lat is None or lon is None or "sqlite" in engine.dialect.name:
         return None
     return f"SRID=4326;POINT({lon} {lat})"
 
@@ -68,7 +71,7 @@ def load_profiles(rows: list[dict]) -> int:
                 fm = float_cache[wmo]
 
                 existing = (
-                    db.query(Profile)
+                    db.query(Profile.id)
                     .filter_by(
                         float_id=fm.id,
                         cycle_number=r["cycle_number"],
@@ -115,7 +118,7 @@ def load_trajectory_points(rows: list[dict]) -> int:
                 fm = float_cache[wmo]
 
                 existing = (
-                    db.query(TrajectoryPoint)
+                    db.query(TrajectoryPoint.id)
                     .filter_by(float_id=fm.id, cycle_number=r["cycle_number"])
                     .first()
                 )

@@ -16,6 +16,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from database import engine, Base, init_db
+# pyrefly: ignore [missing-import]
 from sqlalchemy import text
 from utils.logger import get_logger
 

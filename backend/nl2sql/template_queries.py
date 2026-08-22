@@ -32,7 +32,7 @@ SELECT
 FROM profiles
 WHERE lat BETWEEN {lat_min} AND {lat_max}
   AND lon BETWEEN {lon_min} AND {lon_max}
-  AND pressure BETWEEN 0 AND 10
+  AND pressure BETWEEN 0 AND 30
   AND timestamp BETWEEN '{date_start}' AND '{date_end}'
 GROUP BY month
 ORDER BY month

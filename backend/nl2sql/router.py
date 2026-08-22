@@ -24,12 +24,40 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+import calendar
+
+MONTH_MAP = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "september": 9, "sept": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
 # ── Default parameter values ──────────────────────────────────────
 
 def _default_dates() -> tuple[str, str]:
     end = datetime.utcnow()
     start = end - timedelta(days=365 * 3)
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
+
+def _detect_dates(text: str) -> tuple[str, str]:
+    """Extract date range from text (e.g. 'feb 2026', '2025') or return 3-year default."""
+    text_lower = text.lower()
+    month_names = "|".join(MONTH_MAP.keys())
+    match = re.search(rf"\b({month_names})\s*(?:of\s*)?(\d{{4}})\b", text_lower)
+    if match:
+        m_str, y_str = match.group(1), int(match.group(2))
+        m_num = MONTH_MAP[m_str]
+        _, last_day = calendar.monthrange(y_str, m_num)
+        return f"{y_str}-{m_num:02d}-01", f"{y_str}-{m_num:02d}-{last_day:02d}"
+
+    match_year = re.search(r"\b(20\d{2})\b", text_lower)
+    if match_year:
+        y_str = int(match_year.group(1))
+        return f"{y_str}-01-01", f"{y_str}-12-31"
+
+    return _default_dates()
 
 
 def _extract_wmo(text: str) -> str | None:
@@ -55,6 +83,10 @@ def _detect_region(text: str) -> tuple[float, float, float, float] | None:
     for alias, key in {
         "arabian sea": "arabian_sea",
         "bay of bengal": "bay_of_bengal",
+        "north indian ocean": "north_indian_ocean",
+        "south indian ocean": "south_indian_ocean",
+        "southern ocean": "south_indian_ocean",
+        "antarctic": "south_indian_ocean",
         "indian ocean": "indian_ocean",
         "arabian": "arabian_sea",
         "bengal": "bay_of_bengal",
@@ -75,7 +107,7 @@ def _fill_params(template: dict, question: str) -> dict | None:
     params = template["params"]
     filled: dict = {}
 
-    date_start, date_end = _default_dates()
+    date_start, date_end = _detect_dates(question)
     bbox = _detect_region(question) or (-60.0, 30.0, 20.0, 120.0)  # default: Indian Ocean
     lat_min, lat_max, lon_min, lon_max = bbox
 
@@ -111,7 +143,12 @@ def _fill_params(template: dict, question: str) -> dict | None:
 
 
 def _tokenise(text: str) -> set[str]:
-    return set(re.sub(r"[^\w\s]", " ", text.lower()).split())
+    tokens = set(re.sub(r"[^\w\s]", " ", text.lower()).split())
+    if "temp" in tokens:
+        tokens.add("temperature")
+    if "sal" in tokens:
+        tokens.add("salinity")
+    return tokens
 
 
 def route(question: str) -> dict:

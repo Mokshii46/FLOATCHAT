@@ -44,7 +44,7 @@ def filter_profiles(rows: list[dict]) -> list[dict]:
         if pres_ok and (temp_ok or psal_ok):
             kept.append(r)
 
-    logger.info("QC filter: %d → %d profile rows (%.1f%% retained)",
+    logger.info("QC filter: %d -> %d profile rows (%.1f%% retained)",
                 before, len(kept), 100 * len(kept) / before if before else 0)
     return kept
 
@@ -61,5 +61,5 @@ def filter_bgc_profiles(rows: list[dict]) -> list[dict]:
         r for r in rows
         if any(_qc_ok(r.get(f)) for f in bgc_qc_fields)
     ]
-    logger.info("BGC QC filter: %d → %d rows", before, len(kept))
+    logger.info("BGC QC filter: %d -> %d rows", before, len(kept))
     return kept

@@ -9,7 +9,9 @@ import os
 from pathlib import Path
 from typing import Optional
 
+# pyrefly: ignore [missing-import]
 import argopy
+# pyrefly: ignore [missing-import]
 from argopy import DataFetcher as ArgoDataFetcher
 
 from config import settings

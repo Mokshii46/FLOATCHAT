@@ -42,6 +42,13 @@ engine = _create_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 
+if "postgresql" in engine.dialect.name:
+    from geoalchemy2 import Geometry
+    SpatialPoint = Geometry(geometry_type="POINT", srid=4326)
+else:
+    from sqlalchemy import String
+    SpatialPoint = String
+
 
 def init_db() -> None:
     """Create database extensions/tables."""

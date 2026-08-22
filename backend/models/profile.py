@@ -7,9 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import ForeignKey, Integer, DateTime, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from geoalchemy2 import Geometry
-
-from database import Base
+from database import Base, SpatialPoint
 
 
 class Profile(Base):
@@ -22,7 +20,7 @@ class Profile(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
     lat: Mapped[float] = mapped_column(nullable=False)
     lon: Mapped[float] = mapped_column(nullable=False)
-    geom = mapped_column(Geometry(geometry_type="POINT", srid=4326), nullable=True)
+    geom = mapped_column(SpatialPoint, nullable=True)
 
     pressure: Mapped[float] = mapped_column(nullable=False)          # dbar (proxy for depth)
     temperature: Mapped[float] = mapped_column(nullable=True)        # degC
