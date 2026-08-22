@@ -52,33 +52,52 @@ def complete_prompt(system_prompt: str, user_prompt: str, max_tokens: int = 1024
 
 def _call_groq(system_prompt: str, user_prompt: str, api_key: str, max_tokens: int) -> str | None:
     """Call Groq API using HTTPX (zero extra heavy dependencies required)."""
-    model = settings.llm_model if settings.llm_model.startswith("llama") or "/" in settings.llm_model or "mixtral" in settings.llm_model else "llama-3.3-70b-versatile"
+    # Try models supported on Groq
+    models_to_try = [
+        "openai/gpt-oss-120b",
+        "openai/gpt-oss-20b",
+        "qwen/qwen3.6-27b",
+        "groq/compound",
+        "groq/compound-mini",
+    ]
+    model = settings.llm_model
+    if model in models_to_try:
+        models_to_try.remove(model)
+        models_to_try.insert(0, model)
+
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "max_tokens": max_tokens,
-        "temperature": 0.1,
-    }
 
-    try:
-        logger.debug("Calling Groq API model=%s ...", model)
-        with httpx.Client(timeout=20.0) as client:
-            resp = client.post(url, headers=headers, json=payload)
-            resp.raise_for_status()
-            data = resp.json()
-            content = data["choices"][0]["message"]["content"].strip()
-            return content
-    except Exception as exc:
-        logger.warning("Groq API call failed: %s. Falling back to offline mode.", exc)
-        return None
+    for try_model in models_to_try:
+        payload = {
+            "model": try_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": max_tokens,
+            "temperature": 0.1,
+        }
+        try:
+            logger.debug("Calling Groq API model=%s ...", try_model)
+            with httpx.Client(timeout=25.0) as client:
+                resp = client.post(url, headers=headers, json=payload)
+                if resp.status_code == 404 or resp.status_code == 400:
+                    logger.warning("Groq model '%s' failed (%d: %s). Trying next...", try_model, resp.status_code, resp.text[:120])
+                    continue
+                resp.raise_for_status()
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"].strip()
+                return content
+        except Exception as exc:
+            logger.warning("Groq API call failed for model '%s': %s", try_model, exc)
+            continue
+
+    logger.warning("All Groq models failed. Falling back to offline mode.")
+    return None
 
 
 def _call_anthropic(system_prompt: str, user_prompt: str, api_key: str, max_tokens: int) -> str | None:

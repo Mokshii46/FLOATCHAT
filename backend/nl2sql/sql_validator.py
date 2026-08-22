@@ -46,6 +46,9 @@ ALLOWED_COLUMNS: frozenset[str] = frozenset({
     "n_obs", "avg_temp", "avg_sal", "avg_salinity", "anomaly",
     "climatology", "month", "pressure_bin", "thermocline_depth_dbar",
     "avg_oxygen_umolkg", "avg_temp_c", "avg_salinity_psu", "dt",
+    # SQLite compat
+    "sub", "strftime", "datetime", "cast", "real", "integer", "abs",
+    "avg_val", "mean_val",
 })
 
 BANNED_PATTERNS: list[re.Pattern] = [

@@ -2,6 +2,8 @@
 GET /viz/map        — GeoJSON of all active float last positions
 GET /viz/profile    — depth profile for a float + cycle
 GET /viz/timeseries — monthly mean T/S for a region
+
+All SQL is SQLite-compatible.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ def viz_map(
     lon_min: float = Query(20.0),
     lon_max: float = Query(120.0),
 ) -> dict[str, Any]:
+    # SQLite-compatible: use GROUP BY + MAX() instead of DISTINCT ON
     sql = f"""
 SELECT fm.wmo_id, fm.platform_type, fm.is_bgc, fm.dac,
        tp.lat, tp.lon, tp.cycle_number, tp.timestamp,
@@ -31,9 +34,11 @@ JOIN float_metadata fm ON tp.float_id = fm.id
 WHERE tp.lat BETWEEN {lat_min} AND {lat_max}
   AND tp.lon BETWEEN {lon_min} AND {lon_max}
   AND tp.id IN (
-      SELECT DISTINCT ON (float_id) id
-      FROM trajectory_points
-      ORDER BY float_id, cycle_number DESC
+      SELECT tp2.id
+      FROM trajectory_points tp2
+      WHERE tp2.float_id = tp.float_id
+      ORDER BY tp2.cycle_number DESC
+      LIMIT 1
   )
 LIMIT 5000;
 """
@@ -72,13 +77,13 @@ def viz_timeseries(
 ) -> dict[str, Any]:
     col = parameter if parameter in ("temperature", "salinity") else "temperature"
     sql = f"""
-SELECT DATE_TRUNC('month', timestamp) AS month,
-       ROUND(AVG({col})::numeric, 3) AS avg_val,
+SELECT strftime('%Y-%m', timestamp) AS month,
+       ROUND(AVG({col}), 3) AS avg_val,
        COUNT(*) AS n_obs
 FROM profiles
 WHERE lat BETWEEN {lat_min} AND {lat_max}
   AND lon BETWEEN {lon_min} AND {lon_max}
-  AND timestamp >= NOW() - INTERVAL '{months} months'
+  AND timestamp >= datetime('now', '-{months} months')
   AND {col} IS NOT NULL
 GROUP BY month
 ORDER BY month

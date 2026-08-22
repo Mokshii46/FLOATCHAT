@@ -15,30 +15,38 @@ logger = get_logger(__name__)
 
 DB_PATH = Path(__file__).parent / "floatchat.db"
 
-# Create primary engine
-try:
-    engine = create_engine(settings.database_url, pool_pre_ping=True, future=True)
-except Exception:
-    engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}, future=True)
+# ── Engine creation with automatic fallback ──────────────────────
 
+def _create_engine():
+    """Try PostgreSQL first, fall back to SQLite if connection fails."""
+    db_url = settings.database_url
+    if "postgresql" in db_url:
+        try:
+            pg_engine = create_engine(db_url, pool_pre_ping=True, future=True)
+            # Actually test the connection
+            with pg_engine.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            logger.info("Connected to PostgreSQL.")
+            return pg_engine
+        except Exception as exc:
+            logger.warning(
+                "PostgreSQL connection failed (%s). Falling back to SQLite at %s",
+                exc, DB_PATH
+            )
+
+    sqlite_url = f"sqlite:///{DB_PATH}"
+    return create_engine(sqlite_url, connect_args={"check_same_thread": False}, future=True)
+
+
+engine = _create_engine()
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 Base = declarative_base()
 
 
-def _fallback_to_sqlite():
-    global engine, SessionLocal
-    logger.warning(
-        "PostgreSQL connection failed. Falling back to local SQLite database (sqlite:///%s). "
-        "Start Docker or Postgres for full PostGIS support.", DB_PATH
-    )
-    engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"check_same_thread": False}, future=True)
-    SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-
-
 def init_db() -> None:
-    """Create database extensions/tables with automatic fallback."""
-    global engine
-    # Try connecting to configured DB
+    """Create database extensions/tables."""
+    global engine, SessionLocal
+
     try:
         with engine.connect() as conn:
             if "postgresql" in engine.dialect.name:
@@ -48,8 +56,14 @@ def init_db() -> None:
                 except Exception as e:
                     logger.warning("Could not enable PostGIS extension: %s", e)
     except Exception as exc:
-        logger.warning("Database connection error: %s", exc)
-        _fallback_to_sqlite()
+        logger.warning("Database connection error during init: %s", exc)
+        # Force SQLite fallback
+        engine = create_engine(
+            f"sqlite:///{DB_PATH}",
+            connect_args={"check_same_thread": False},
+            future=True,
+        )
+        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
     # Import models so they register on Base.metadata before create_all
     try:

@@ -1,15 +1,16 @@
-import React, { useState } from 'react'
+import React from 'react'
 import { Link } from 'react-router-dom'
 import { Waves } from 'lucide-react'
 import ChatPanel from '../components/ChatPanel.jsx'
 import MapView from '../components/MapView.jsx'
 import DepthProfileChart from '../components/DepthProfileChart.jsx'
 import TimeSeriesChart from '../components/TimeSeriesChart.jsx'
+import DataTable from '../components/DataTable.jsx'
 import ModeToggle from '../components/ModeToggle.jsx'
 import { useChat } from '../hooks/useChat.js'
 
 export default function Dashboard() {
-  const { messages } = useChat()
+  const { messages, mode } = useChat()
 
   // Find the most recent assistant message with viz data
   const latestViz = [...messages]
@@ -26,6 +27,12 @@ export default function Dashboard() {
         return <DepthProfileChart data={latestViz.data} />
       case 'timeseries':
         return <TimeSeriesChart data={latestViz.data} />
+      case 'table':
+        // Researcher mode: show data table; Explorer: show map fallback
+        if (mode === 'researcher' && latestViz.data?.rows?.length > 0) {
+          return <DataTable rows={latestViz.data.rows} />
+        }
+        return <MapView />
       default:
         return <MapView />
     }

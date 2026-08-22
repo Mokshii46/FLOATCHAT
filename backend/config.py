@@ -9,7 +9,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=("../.env", ".env"),   # repo root first, then CWD
+        extra="ignore",
+    )
 
     # Database
     database_url: str = "postgresql+psycopg2://floatchat:floatchat@localhost:5432/floatchat"
@@ -18,7 +21,7 @@ class Settings(BaseSettings):
     llm_provider: str = "groq"
     llm_api_key: str = ""
     groq_api_key: str = ""
-    llm_model: str = "llama-3.3-70b-versatile"
+    llm_model: str = "openai/gpt-oss-120b"
     embedding_model: str = "all-MiniLM-L6-v2"
 
     # Vector store

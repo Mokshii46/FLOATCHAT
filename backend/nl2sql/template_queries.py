@@ -6,6 +6,9 @@ Each template is a dict with:
   - sql       : parameterised SQL using Python str.format() placeholders
   - params    : list of required parameter names
   - description : human-readable label (shown in ExplainabilityPanel)
+
+NOTE: All SQL is written in SQLite-compatible dialect (strftime instead of
+DATE_TRUNC, CAST instead of ::numeric, datetime('now') instead of NOW()).
 """
 
 from __future__ import annotations
@@ -17,11 +20,14 @@ TEMPLATES: list[dict] = [
         "id": "avg_sst_region",
         "description": "Average sea surface temperature in a geographic region",
         "keywords": [{"temperature", "average", "region"}, {"sst", "region"},
-                     {"temperature", "mean"}],
+                     {"temperature", "mean"}, {"temperature", "sea"},
+                     {"temperature", "arabian"}, {"temperature", "bengal"},
+                     {"temperature", "ocean"}, {"temperature", "year"},
+                     {"temperature", "indian"}],
         "sql": """
 SELECT
-    DATE_TRUNC('month', timestamp) AS month,
-    ROUND(AVG(temperature)::numeric, 3) AS avg_temp_c,
+    strftime('%Y-%m', timestamp) AS month,
+    ROUND(AVG(temperature), 3) AS avg_temp_c,
     COUNT(*) AS n_obs
 FROM profiles
 WHERE lat BETWEEN {lat_min} AND {lat_max}
@@ -40,11 +46,13 @@ LIMIT 5000;
         "id": "salinity_region",
         "description": "Average salinity in a geographic region over time",
         "keywords": [{"salinity", "region"}, {"salinity", "ocean"},
-                     {"salinity", "sea"}, {"salinity", "bay"}, {"salinity", "gulf"}],
+                     {"salinity", "sea"}, {"salinity", "bay"}, {"salinity", "gulf"},
+                     {"salinity", "arabian"}, {"salinity", "bengal"},
+                     {"salinity", "indian"}],
         "sql": """
 SELECT
-    DATE_TRUNC('month', timestamp) AS month,
-    ROUND(AVG(salinity)::numeric, 4) AS avg_salinity_psu,
+    strftime('%Y-%m', timestamp) AS month,
+    ROUND(AVG(salinity), 4) AS avg_salinity_psu,
     COUNT(*) AS n_obs
 FROM profiles
 WHERE lat BETWEEN {lat_min} AND {lat_max}
@@ -102,9 +110,9 @@ LIMIT 5000;
                      {"difference", "float"}, {"versus", "float"}],
         "sql": """
 SELECT fm.wmo_id,
-       ROUND(p.pressure / 100) * 100 AS pressure_bin,
-       ROUND(AVG(p.temperature)::numeric, 3) AS avg_temp,
-       ROUND(AVG(p.salinity)::numeric, 4) AS avg_sal
+       CAST(ROUND(p.pressure / 100) * 100 AS INTEGER) AS pressure_bin,
+       ROUND(AVG(p.temperature), 3) AS avg_temp,
+       ROUND(AVG(p.salinity), 4) AS avg_sal
 FROM profiles p
 JOIN float_metadata fm ON p.float_id = fm.id
 WHERE fm.wmo_id IN ('{wmo_id_1}', '{wmo_id_2}')
@@ -120,7 +128,8 @@ LIMIT 5000;
         "id": "list_active_floats",
         "description": "List of all active floats",
         "keywords": [{"list", "float"}, {"active", "float"}, {"all", "float"},
-                     {"floats", "active"}, {"available", "float"}],
+                     {"floats", "active"}, {"available", "float"},
+                     {"show", "float"}, {"show", "active"}, {"how", "many", "float"}],
         "sql": """
 SELECT wmo_id, dac, platform_type, deploy_date,
        deploy_lat, deploy_lon, is_bgc, status
@@ -158,7 +167,7 @@ LIMIT 5000;
         "keywords": [{"oxygen", "trend"}, {"dissolved", "oxygen"},
                      {"o2", "depth"}, {"hypoxia"}],
         "sql": """
-SELECT DATE_TRUNC('month', b.timestamp) AS month,
+SELECT strftime('%Y-%m', b.timestamp) AS month,
        AVG(b.dissolved_oxygen) AS avg_oxygen_umolkg
 FROM bgc_profiles b
 WHERE b.lat BETWEEN {lat_min} AND {lat_max}
@@ -176,12 +185,13 @@ LIMIT 5000;
         "id": "list_bgc_floats",
         "description": "List all active BGC floats",
         "keywords": [{"bgc", "float"}, {"biogeochemical"}, {"bgc", "list"},
-                     {"oxygen", "float"}, {"chlorophyll", "float"}],
+                     {"oxygen", "float"}, {"chlorophyll", "float"},
+                     {"show", "bgc"}, {"bgc", "map"}],
         "sql": """
 SELECT wmo_id, dac, platform_type, deploy_date,
        deploy_lat, deploy_lon
 FROM float_metadata
-WHERE is_bgc = true AND status = 'active'
+WHERE is_bgc = 1 AND status = 'active'
 ORDER BY deploy_date DESC
 LIMIT 5000;
 """,
@@ -196,8 +206,8 @@ LIMIT 5000;
                      {"temperature", "change"}, {"heat", "anomaly"}],
         "sql": """
 WITH monthly AS (
-    SELECT DATE_TRUNC('month', timestamp) AS month,
-           ROUND(AVG(temperature)::numeric, 3) AS avg_temp
+    SELECT strftime('%Y-%m', timestamp) AS month,
+           ROUND(AVG(temperature), 3) AS avg_temp
     FROM profiles
     WHERE lat BETWEEN {lat_min} AND {lat_max}
       AND lon BETWEEN {lon_min} AND {lon_max}
@@ -209,7 +219,7 @@ long_term AS (
 )
 SELECT m.month,
        m.avg_temp,
-       ROUND((m.avg_temp - lt.climatology)::numeric, 3) AS anomaly
+       ROUND(m.avg_temp - lt.climatology, 3) AS anomaly
 FROM monthly m, long_term lt
 ORDER BY m.month
 LIMIT 5000;
@@ -222,7 +232,8 @@ LIMIT 5000;
         "id": "floats_in_region",
         "description": "Floats observed in a geographic bounding box",
         "keywords": [{"float", "region"}, {"float", "area"}, {"float", "location"},
-                     {"float", "bay"}, {"float", "arabian"}, {"float", "bengal"}],
+                     {"float", "bay"}, {"float", "arabian"}, {"float", "bengal"},
+                     {"map", "float"}, {"map", "show"}],
         "sql": """
 SELECT DISTINCT fm.wmo_id, fm.dac, fm.platform_type, fm.is_bgc,
        tp.lat, tp.lon, tp.timestamp
@@ -243,7 +254,7 @@ LIMIT 5000;
         "description": "Approximate thermocline depth for a float cycle",
         "keywords": [{"thermocline"}, {"mixed layer"}, {"mld"}, {"thermocline", "depth"}],
         "sql": """
-SELECT p.pressure AS thermocline_depth_dbar
+SELECT sub.pressure AS thermocline_depth_dbar
 FROM (
     SELECT pressure, temperature,
            temperature - LAG(temperature) OVER (ORDER BY pressure) AS dt
@@ -254,7 +265,7 @@ FROM (
       AND p.temperature IS NOT NULL
     ORDER BY pressure
 ) sub
-ORDER BY ABS(dt) DESC NULLS LAST
+ORDER BY ABS(sub.dt) DESC
 LIMIT 1;
 """,
         "params": ["wmo_id", "cycle_number"],
@@ -265,7 +276,8 @@ LIMIT 1;
         "id": "float_summary",
         "description": "Latest cycle summary for a specific float",
         "keywords": [{"float", "summary"}, {"float", "latest"}, {"float", "last"},
-                     {"float", "recent"}, {"float", "current"}],
+                     {"float", "recent"}, {"float", "current"}, {"float", "info"},
+                     {"float", "details"}, {"float", "status"}],
         "sql": """
 SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.status,
        tp.cycle_number, tp.timestamp, tp.lat, tp.lon,

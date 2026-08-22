@@ -49,52 +49,76 @@ def process_chat(
 
     Returns
     -------
-    dict with keys: answer, viz, anomaly, explainability, mode_config, language
+    dict with keys: answer, viz, anomaly, explainability, mode_config, language, row_count
     """
     mode_config = get_mode_config(mode)
 
     # 1–2. Language detection + translation
     detected_lang = language or detect_language(question)
     english_question = translate_to_english(question, detected_lang)
-    logger.info("Question [%s→en]: %s", detected_lang, english_question[:80])
+    logger.info("Question [%s->en]: %s", detected_lang, english_question[:80])
 
     # 3. Route → SQL
-    route_result = route(english_question)
-    sql = route_result["sql"]
-    rag_context = ""
+    try:
+        route_result = route(english_question)
+        sql = route_result["sql"]
+    except Exception as exc:
+        logger.error("NL2SQL routing failed: %s", exc)
+        return _error_response(
+            "I couldn't understand your query well enough to search the database. "
+            "Try rephrasing, e.g.: 'Show active floats' or 'Temperature in Arabian Sea'.",
+            mode_config, detected_lang
+        )
 
+    rag_context = ""
     if route_result["source"] == "llm":
-        from vectorstore.chroma_client import get_chroma_client
-        rag_context = get_chroma_client().get_relevant_context(english_question)
+        try:
+            from vectorstore.chroma_client import get_chroma_client
+            rag_context = get_chroma_client().get_relevant_context(english_question)
+        except Exception as exc:
+            logger.debug("RAG context retrieval failed: %s", exc)
 
     # 4. Execute
     try:
         rows = execute_query(sql)
     except Exception as exc:
         logger.error("Query execution failed: %s", exc)
-        return _error_response(str(exc), mode_config)
+        return _error_response(
+            f"The database query failed: {exc}. "
+            "This might be a temporary issue — try a simpler question.",
+            mode_config, detected_lang
+        )
 
     # 5. Shape viz
-    viz_payload = shape_results(rows)
+    if rows:
+        viz_payload = shape_results(rows)
+    else:
+        viz_payload = {"viz_type": "table", "data": {"rows": []}, "row_count": 0}
 
     # 6. Generate summary
-    preview = preview_rows(rows)
-    mode_instruction = get_summary_instruction(mode_config["mode"])
-    lang_name = _lang_name(detected_lang)
+    if rows:
+        preview = preview_rows(rows)
+        mode_instruction = get_summary_instruction(mode_config["mode"])
 
-    summary_en = generate_summary(
-        question=english_question,
-        results_preview=f"{preview}\n\nStyle instruction: {mode_instruction}",
-        mode=mode_config["mode"],
-        language="English",
-    )
+        summary_en = generate_summary(
+            question=english_question,
+            results_preview=f"{preview}\n\nStyle instruction: {mode_instruction}",
+            mode=mode_config["mode"],
+            language="English",
+        )
+    else:
+        summary_en = (
+            "I searched the ARGO float database but didn't find any data matching your query. "
+            "This could mean the specific float ID, region, or time range has no observations. "
+            "Try asking about 'active floats', 'temperature in Arabian Sea', or 'BGC floats'."
+        )
 
     # 7. Translate summary back
     answer = translate_from_english(summary_en, detected_lang)
 
     # 8. Anomaly check (lightweight: only on timeseries results)
     anomaly_payload: dict | None = None
-    if viz_payload["viz_type"] in ("timeseries", "table") and len(rows) > 3:
+    if rows and viz_payload["viz_type"] in ("timeseries", "table") and len(rows) > 3:
         try:
             from services.anomaly_service import detect_anomaly
             anomaly = detect_anomaly()
@@ -128,13 +152,13 @@ def _lang_name(code: str) -> str:
     return SUPPORTED_LANGUAGES.get(code, "English")
 
 
-def _error_response(message: str, mode_config: dict) -> dict:
+def _error_response(message: str, mode_config: dict, lang: str = "en") -> dict:
     return {
-        "answer": f"Sorry, I encountered an error running your query: {message}",
+        "answer": message,
         "viz": None,
         "anomaly": None,
         "explainability": None,
         "mode_config": mode_config,
-        "language": "en",
+        "language": lang,
         "row_count": 0,
     }

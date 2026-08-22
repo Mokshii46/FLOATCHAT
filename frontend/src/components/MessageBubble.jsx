@@ -7,7 +7,9 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 export default function MessageBubble({ message }) {
   const { mode } = useChat()
   const isUser = message.role === 'user'
-  const [showExplain, setShowExplain] = useState(false)
+
+  // In researcher mode, auto-expand explainability by default
+  const [showExplain, setShowExplain] = useState(mode === 'researcher')
 
   return (
     <div className={`message-bubble ${isUser ? 'user' : 'assistant'}`}>
@@ -28,7 +30,7 @@ export default function MessageBubble({ message }) {
             onClick={() => setShowExplain(!showExplain)}
           >
             {showExplain ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            {showExplain ? 'Hide' : 'How did FloatChat answer this?'}
+            {showExplain ? 'Hide details' : 'How did FloatChat answer this?'}
           </button>
           {showExplain && <ExplainabilityPanel payload={message.explainability} />}
         </div>
