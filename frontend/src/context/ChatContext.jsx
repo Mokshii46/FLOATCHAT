@@ -1,6 +1,26 @@
-import React, { createContext, useContext, useReducer } from 'react'
+import React, { createContext, useContext, useReducer, useEffect } from 'react'
 
 const ChatContext = createContext(null)
+
+const STORAGE_KEY = 'floatchat_sessions'
+const ACTIVE_SESSION_KEY = 'floatchat_active_session'
+
+function generateId() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+}
+
+function loadSessions() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    return raw ? JSON.parse(raw) : []
+  } catch { return [] }
+}
+
+function saveSessions(sessions) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sessions))
+  } catch {}
+}
 
 const initialState = {
   messages: [],        // [{ role: 'user'|'assistant', content, viz, anomaly, explainability }]
@@ -9,6 +29,9 @@ const initialState = {
   isLoading: false,
   lastSql: null,       // last validated SQL (for export)
   rowCount: 0,
+  mapResetKey: 0,      // incremented on CLEAR to trigger map reset
+  sessionId: null,     // current session ID
+  sessions: loadSessions(),  // list of { id, title, messages, updatedAt }
 }
 
 function chatReducer(state, action) {
@@ -33,6 +56,13 @@ function chatReducer(state, action) {
         rowCount: action.payload.row_count || 0,
       }
 
+    case 'EDIT_USER_MESSAGE':
+      // Truncate messages at the given index (remove the message at index and everything after)
+      return {
+        ...state,
+        messages: state.messages.slice(0, action.payload.index),
+      }
+
     case 'SET_LOADING':
       return { ...state, isLoading: action.payload }
 
@@ -43,7 +73,43 @@ function chatReducer(state, action) {
       return { ...state, language: action.payload }
 
     case 'CLEAR':
-      return { ...initialState, mode: state.mode, language: state.language }
+      return {
+        ...initialState,
+        mode: state.mode,
+        language: state.language,
+        mapResetKey: state.mapResetKey + 1,
+        sessions: state.sessions,
+        sessionId: null,
+      }
+
+    case 'SAVE_SESSION': {
+      const { id, title, messages: msgs } = action.payload
+      const existing = state.sessions.filter((s) => s.id !== id)
+      const updated = [
+        { id, title, messages: msgs, updatedAt: Date.now() },
+        ...existing,
+      ].slice(0, 20) // keep last 20 sessions
+      saveSessions(updated)
+      return { ...state, sessionId: id, sessions: updated }
+    }
+
+    case 'LOAD_SESSION': {
+      const session = state.sessions.find((s) => s.id === action.payload)
+      if (!session) return state
+      return {
+        ...state,
+        messages: session.messages,
+        sessionId: session.id,
+        lastSql: null,
+        rowCount: 0,
+      }
+    }
+
+    case 'DELETE_SESSION': {
+      const remaining = state.sessions.filter((s) => s.id !== action.payload)
+      saveSessions(remaining)
+      return { ...state, sessions: remaining }
+    }
 
     default:
       return state

@@ -4,24 +4,15 @@ import { useChat } from '../hooks/useChat.js'
 import MessageBubble from './MessageBubble.jsx'
 import VoiceInput from './VoiceInput.jsx'
 import ExportButton from './ExportButton.jsx'
-import { Send, Trash2, Compass, FlaskConical, Sparkles } from 'lucide-react'
-
-const EXPLORER_PROMPTS = [
-  "What's the ocean temperature near India?",
-  "Show me all active floats on a map",
-  "Which floats are in the Arabian Sea?",
-]
-
-const RESEARCHER_PROMPTS = [
-  'Temperature anomaly in Bay of Bengal',
-  'List all BGC floats with their sensors',
-  'Show active floats',
-]
+import SuggestedPrompts from './SuggestedPrompts.jsx'
+import { Send, Trash2, Compass, FlaskConical, Sparkles, History, X, Clock, Plus } from 'lucide-react'
 
 export default function ChatPanel() {
   const { t } = useTranslation()
-  const { messages, isLoading, sendMessage, clearChat, lastSql, rowCount, mode } = useChat()
+  const { messages, isLoading, sendMessage, clearChat, lastSql, rowCount, mode,
+          sessions, loadSession, deleteSession } = useChat()
   const [input, setInput] = useState('')
+  const [showHistory, setShowHistory] = useState(false)
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -41,7 +32,11 @@ export default function ChatPanel() {
     }
   }
 
-  const suggestedPrompts = mode === 'researcher' ? RESEARCHER_PROMPTS : EXPLORER_PROMPTS
+  const handleNewChat = () => {
+    clearChat()
+    setShowHistory(false)
+  }
+
   const modeLabel = mode === 'researcher' ? 'Research' : 'Explorer'
   const modeClass = mode === 'researcher' ? 'researcher' : 'citizen'
 
@@ -56,10 +51,56 @@ export default function ChatPanel() {
             {' '}{modeLabel}
           </span>
         </div>
-        <button className="icon-btn" onClick={clearChat} title="Clear chat">
-          <Trash2 size={16} />
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+          <button
+            className="new-chat-btn"
+            onClick={handleNewChat}
+            title="Start new chat"
+          >
+            <Plus size={14} />
+            <span>New Chat</span>
+          </button>
+          {sessions.length > 0 && (
+            <button
+              className="icon-btn"
+              onClick={() => setShowHistory(!showHistory)}
+              title="Chat history"
+            >
+              <History size={16} />
+            </button>
+          )}
+        </div>
       </div>
+
+      {/* Session history dropdown */}
+      {showHistory && (
+        <div className="session-history">
+          <div className="session-history-header">
+            <span>Chat History</span>
+            <button className="icon-btn" onClick={() => setShowHistory(false)}>
+              <X size={14} />
+            </button>
+          </div>
+          {sessions.map((s) => (
+            <div key={s.id} className="session-item">
+              <button
+                className="session-item-btn"
+                onClick={() => { loadSession(s.id); setShowHistory(false) }}
+              >
+                <Clock size={12} />
+                <span className="session-title">{s.title}</span>
+              </button>
+              <button
+                className="session-delete-btn"
+                onClick={() => deleteSession(s.id)}
+                title="Delete session"
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Messages */}
       <div className="messages-container">
@@ -78,19 +119,11 @@ export default function ChatPanel() {
                 ? 'Get raw data, SQL queries, and QC-flagged results'
                 : 'Get easy-to-understand answers with visualizations'}
             </p>
-            <div className="suggested-queries">
-              {suggestedPrompts.map((q) => (
-                <button key={q} className="suggest-btn" onClick={() => sendMessage(q)}>
-                  <span className="suggest-icon">→</span>
-                  {q}
-                </button>
-              ))}
-            </div>
           </div>
         )}
 
         {messages.map((msg, i) => (
-          <MessageBubble key={i} message={msg} />
+          <MessageBubble key={`${i}-${msg.content?.slice(0,20)}`} message={msg} index={i} />
         ))}
 
         {isLoading && (
@@ -104,9 +137,12 @@ export default function ChatPanel() {
       {/* Export row */}
       {lastSql && <ExportButton sql={lastSql} rowCount={rowCount} />}
 
+      {/* Suggested prompts above input */}
+      <SuggestedPrompts />
+
       {/* Input row */}
       <div className="input-row">
-        <VoiceInput onTranscribed={setInput} />
+        <VoiceInput onTranscribed={(text) => setInput((prev) => (prev ? `${prev} ${text}` : text))} />
         <textarea
           className="chat-input"
           rows={2}

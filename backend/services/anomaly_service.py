@@ -17,6 +17,7 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 Z_THRESHOLD = 2.0   # flag if |z| > 2.0
+MIN_POINTS = 6       # minimum data points for valid z-score
 
 
 @dataclass
@@ -34,7 +35,7 @@ def detect_anomaly(
     region: str = "bay_of_bengal",
     parameter: str = "temperature",
     pressure_max: float = 10.0,
-    months_back: int = 36,
+    months_back: int = 60,
 ) -> AnomalyResult:
     """
     Compute z-score of the most recent monthly mean vs the climatology
@@ -57,8 +58,7 @@ WHERE lat BETWEEN {lat_min} AND {lat_max}
   AND {parameter} IS NOT NULL
   AND timestamp >= datetime('now', '-{months_back} months')
 GROUP BY month
-ORDER BY month DESC
-LIMIT 60;
+ORDER BY month ASC;
 """
     rows = execute_query(sql)
 
@@ -71,7 +71,7 @@ LIMIT 60;
         )
 
     values = [r["mean_val"] for r in rows if r["mean_val"] is not None]
-    if len(values) < 2:
+    if len(values) < MIN_POINTS:
         return AnomalyResult(
             region=region, parameter=parameter,
             latest_value=0, climatology=0, z_score=0,
@@ -79,9 +79,11 @@ LIMIT 60;
             narrative="Insufficient data to detect anomalies in this region."
         )
 
-    latest_val = values[0]          # most recent month
-    climatology = statistics.mean(values[1:])
-    stdev = statistics.stdev(values[1:]) if len(values) > 2 else 1.0
+    # values are sorted chronologically (ASC) — latest is last
+    latest_val = values[-1]
+    history = values[:-1]
+    climatology = statistics.mean(history)
+    stdev = statistics.stdev(history) if len(history) > 2 else 1.0
     z = (latest_val - climatology) / stdev if stdev else 0.0
 
     severity = "normal"
@@ -97,7 +99,7 @@ LIMIT 60;
     narrative = (
         f"The {region.replace('_', ' ')} shows a recent {parameter} of "
         f"{latest_val:.2f}{unit}, which is {change:.2f}{unit} {direction} "
-        f"the {months_back // 12}-year climatological mean ({climatology:.2f}{unit}). "
+        f"the {max(months_back // 12, 1)}-year climatological mean ({climatology:.2f}{unit}). "
         f"Anomaly z-score: {z:.1f} ({'significant' if severity != 'normal' else 'within normal range'})."
     )
 

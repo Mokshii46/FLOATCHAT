@@ -28,7 +28,7 @@ export default function Home() {
         <header className="hero">
           <div className="hero-badge">
             <Anchor size={14} />
-            <span>SIH 2025 — Ocean Intelligence Platform</span>
+            <span>Ocean Intelligence Platform</span>
           </div>
           <h1 className="hero-title">FloatChat</h1>
           <p className="hero-subtitle">
@@ -51,9 +51,9 @@ export default function Home() {
         <div className="stats-row">
           {[
             { value: '4,000+', label: 'Active Floats Worldwide' },
-            { value: '160+', label: 'Contributing Countries' },
-            { value: '2,000m', label: 'Max Profiling Depth' },
-            { value: '7', label: 'Unique Capabilities' },
+            { value: '30+', label: 'Contributing Nations' },
+            { value: '2,000m', label: 'Standard Profiling Depth' },
+            { value: '6', label: 'BGC Parameters Tracked' },
           ].map((s) => (
             <div key={s.label} className="stat-item">
               <div className="stat-value">{s.value}</div>
@@ -104,9 +104,9 @@ export default function Home() {
 
         {/* USP chips */}
         <section className="usp-section">
-          <h2 className="section-title">7 Unique Capabilities</h2>
+          <h2 className="section-title">6 Unique Capabilities</h2>
           <div className="usp-chips">
-            {['🔍 Anomaly Detection', '🌐 Multilingual', '🎯 Trajectory Prediction', '🎤 Voice Input',
+            {['🔍 Anomaly Detection', '🎯 Trajectory Prediction', '🎤 Voice Input',
               '📊 Explainability', '👥 Dual Modes', '🧬 BGC-Argo Integration'].map((u) => (
               <span key={u} className="usp-chip">{u}</span>
             ))}
@@ -115,7 +115,7 @@ export default function Home() {
 
         {/* Footer */}
         <footer className="home-footer">
-          <p>FloatChat — SIH 2025 • Powered by ARGO Programme & INCOIS data</p>
+          <p>FloatChat Powered by ARGO Programme & INCOIS data</p>
         </footer>
       </div>
     </div>

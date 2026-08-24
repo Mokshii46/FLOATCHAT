@@ -108,7 +108,21 @@ def _fill_params(template: dict, question: str) -> dict | None:
     filled: dict = {}
 
     date_start, date_end = _detect_dates(question)
-    bbox = _detect_region(question) or (-60.0, 30.0, 20.0, 120.0)  # default: Indian Ocean
+
+    # Detect region bbox: named region first, then explicit lat/lon coordinates
+    bbox = _detect_region(question)
+    if bbox is None:
+        # Check for explicit coordinates like "latitude 12.5, longitude 72.3"
+        lat_match = re.search(r'latitude\s+(-?\d+\.?\d*)', question, re.IGNORECASE)
+        lon_match = re.search(r'longitude\s+(-?\d+\.?\d*)', question, re.IGNORECASE)
+        if lat_match and lon_match:
+            lat = float(lat_match.group(1))
+            lon = float(lon_match.group(1))
+            # Create a small bounding box around the point (±2 degrees)
+            bbox = (lat - 2.0, lat + 2.0, lon - 2.0, lon + 2.0)
+    if bbox is None:
+        bbox = (-60.0, 30.0, 20.0, 120.0)  # default: Indian Ocean
+
     lat_min, lat_max, lon_min, lon_max = bbox
 
     for p in params:

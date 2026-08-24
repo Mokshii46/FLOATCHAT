@@ -324,4 +324,47 @@ LIMIT 5000;
 """,
         "params": ["wmo_id"],
     },
+
+    # 16. "Tell me about float X" — triggered by map popup
+    {
+        "id": "float_about",
+        "description": "Overview of a specific float including latest position and key measurements",
+        "keywords": [{"tell", "float"}, {"about", "float"}, {"describe", "float"},
+                     {"what", "float"}, {"information", "float"}],
+        "sql": """
+SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.status, fm.is_bgc,
+       tp.cycle_number, tp.timestamp, tp.lat, tp.lon,
+       tp.predicted_next_lat, tp.predicted_next_lon,
+       tp.prediction_confidence
+FROM trajectory_points tp
+JOIN float_metadata fm ON tp.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+ORDER BY tp.cycle_number DESC
+LIMIT 1;
+""",
+        "params": ["wmo_id"],
+    },
+
+    # 17. "Ocean data near lat, lon" — triggered by map popup
+    {
+        "id": "nearby_data",
+        "description": "Recent ocean observations near a geographic coordinate",
+        "keywords": [{"near", "latitude"}, {"near", "location"}, {"data", "near"},
+                     {"ocean", "near"}, {"recent", "near"}],
+        "sql": """
+SELECT strftime('%Y-%m', timestamp) AS month,
+       ROUND(AVG(temperature), 3) AS avg_temp_c,
+       ROUND(AVG(salinity), 4) AS avg_salinity_psu,
+       COUNT(*) AS n_obs
+FROM profiles
+WHERE lat BETWEEN {lat_min} AND {lat_max}
+  AND lon BETWEEN {lon_min} AND {lon_max}
+  AND pressure BETWEEN 0 AND 30
+  AND timestamp >= datetime('now', '-1 years')
+GROUP BY month
+ORDER BY month
+LIMIT 5000;
+""",
+        "params": ["lat_min", "lat_max", "lon_min", "lon_max"],
+    },
 ]

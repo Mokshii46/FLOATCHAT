@@ -61,7 +61,7 @@ def test_chat_returns_answer(client):
         "language": "en",
         "row_count": 12,
     }
-    with patch("api.chat.process_chat", return_value=mock_result):
+    with patch("services.chat_service.process_chat", return_value=mock_result):
         resp = client.post("/chat", json={"question": "Temperature in Arabian Sea?"})
     assert resp.status_code == 200
     data = resp.json()

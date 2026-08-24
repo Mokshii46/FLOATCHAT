@@ -6,11 +6,12 @@ import MapView from '../components/MapView.jsx'
 import DepthProfileChart from '../components/DepthProfileChart.jsx'
 import TimeSeriesChart from '../components/TimeSeriesChart.jsx'
 import DataTable from '../components/DataTable.jsx'
+import StatCard from '../components/StatCard.jsx'
 import ModeToggle from '../components/ModeToggle.jsx'
 import { useChat } from '../hooks/useChat.js'
 
 export default function Dashboard() {
-  const { messages, mode } = useChat()
+  const { messages, mode, mapResetKey } = useChat()
 
   // Find the most recent assistant message with viz data
   const latestViz = [...messages]
@@ -18,23 +19,29 @@ export default function Dashboard() {
     .find((m) => m.role === 'assistant' && m.viz)?.viz
 
   const renderViz = () => {
-    if (!latestViz) return <MapView />
+    if (!latestViz) return <MapView resetKey={mapResetKey} />
 
     switch (latestViz.viz_type) {
       case 'map':
-        return <MapView geojson={latestViz.data} />
+        return <MapView geojson={latestViz.data} resetKey={mapResetKey} />
       case 'depth_profile':
         return <DepthProfileChart data={latestViz.data} />
       case 'timeseries':
         return <TimeSeriesChart data={latestViz.data} />
+      case 'stat_card':
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', padding: '2rem' }}>
+            <StatCard data={latestViz.data} />
+          </div>
+        )
       case 'table':
         // Researcher mode: show data table; Explorer: show map fallback
         if (mode === 'researcher' && latestViz.data?.rows?.length > 0) {
           return <DataTable rows={latestViz.data.rows} />
         }
-        return <MapView />
+        return <MapView resetKey={mapResetKey} />
       default:
-        return <MapView />
+        return <MapView resetKey={mapResetKey} />
     }
   }
 

@@ -121,7 +121,32 @@ def process_chat(
     if rows and viz_payload["viz_type"] in ("timeseries", "table") and len(rows) > 3:
         try:
             from services.anomaly_service import detect_anomaly
-            anomaly = detect_anomaly()
+            from nl2sql.router import _detect_region
+
+            # Extract the actual region and parameter from the user's query
+            bbox = _detect_region(english_question)
+            region_map = {
+                (5.0, 25.0, 55.0, 77.0): "arabian_sea",
+                (5.0, 22.0, 80.0, 98.0): "bay_of_bengal",
+                (-60.0, 30.0, 20.0, 120.0): "indian_ocean",
+                (0.0, 30.0, 45.0, 100.0): "north_indian_ocean",
+                (-60.0, 0.0, 20.0, 120.0): "south_indian_ocean",
+                (8.0, 14.0, 71.0, 75.0): "lakshadweep",
+                (7.0, 15.0, 92.0, 99.0): "andaman_sea",
+                (23.0, 30.0, 48.0, 57.0): "persian_gulf",
+            }
+            detected_region = region_map.get(bbox, "indian_ocean") if bbox else "indian_ocean"
+
+            # Detect which parameter the user asked about
+            q_lower = english_question.lower()
+            if any(w in q_lower for w in ("salinity", "sal")):
+                detected_param = "salinity"
+            elif any(w in q_lower for w in ("oxygen", "o2", "dissolved")):
+                detected_param = "dissolved_oxygen"
+            else:
+                detected_param = "temperature"
+
+            anomaly = detect_anomaly(region=detected_region, parameter=detected_param)
             if anomaly.severity != "normal":
                 anomaly_payload = {
                     "severity": anomaly.severity,

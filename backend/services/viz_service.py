@@ -21,7 +21,7 @@ def detect_viz_type(rows: list[dict]) -> str:
     """
     Infer the best visualisation type from column names.
 
-    Returns one of: "map", "depth_profile", "timeseries", "table"
+    Returns one of: "map", "depth_profile", "timeseries", "stat_card", "table"
     """
     if not rows:
         return "table"
@@ -34,6 +34,17 @@ def detect_viz_type(rows: list[dict]) -> str:
         return "depth_profile"
     if "month" in cols or ("timestamp" in cols and len(rows) > 1):
         return "timeseries"
+
+    # Single-value result → stat card (single row with at least one numeric column)
+    if len(rows) == 1:
+        numeric_cols = [
+            c for c in cols
+            if isinstance(rows[0].get(c), (int, float))
+            and c not in ("n_obs", "cycle_number", "float_id", "id")
+        ]
+        if numeric_cols:
+            return "stat_card"
+
     return "table"
 
 
@@ -107,6 +118,53 @@ def to_timeseries(rows: list[dict]) -> dict:
     return {"type": "timeseries", "series": series}
 
 
+def to_stat_card(rows: list[dict]) -> dict:
+    """Shape a single-row result into a stat card payload."""
+    row = rows[0]
+    # Pick the most relevant numeric column
+    PARAM_PRIORITY = [
+        "avg_temp_c", "avg_temp", "temperature",
+        "avg_salinity_psu", "salinity",
+        "avg_oxygen_umolkg", "dissolved_oxygen",
+        "chlorophyll", "ph", "nitrate",
+        "thermocline_depth_dbar", "pressure",
+    ]
+    param = None
+    value = None
+    for p in PARAM_PRIORITY:
+        if p in row and isinstance(row[p], (int, float)):
+            param = p
+            value = row[p]
+            break
+    if param is None:
+        # Fall back to first numeric column
+        for k, v in row.items():
+            if isinstance(v, (int, float)) and k not in ("n_obs", "cycle_number", "float_id", "id"):
+                param = k
+                value = v
+                break
+
+    # Build context label from remaining columns
+    context_parts = []
+    for k, v in row.items():
+        if k != param and v is not None:
+            if k == "wmo_id":
+                context_parts.append(f"Float {v}")
+            elif k == "month":
+                context_parts.append(f"Month: {v}")
+            elif k not in ("n_obs", "float_id", "id"):
+                context_parts.append(f"{k}: {v}")
+    context = " · ".join(context_parts[:3]) if context_parts else None
+
+    return {
+        "value": value,
+        "param": param,
+        "unit": None,   # frontend StatCard resolves units from param name
+        "label": None,  # frontend StatCard resolves labels from param name
+        "context": context,
+    }
+
+
 def shape_results(rows: list[dict]) -> dict:
     """
     Auto-detect viz type and return shaped data.
@@ -127,6 +185,8 @@ def shape_results(rows: list[dict]) -> dict:
         data = to_depth_profile(rows)
     elif viz_type == "timeseries":
         data = to_timeseries(rows)
+    elif viz_type == "stat_card":
+        data = to_stat_card(rows)
     else:
         # Serialise for table display
         data = {"rows": _serialise(rows)}
