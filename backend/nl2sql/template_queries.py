@@ -1,5 +1,5 @@
 """
-~15 hardcoded SQL templates for the most common ARGO question types.
+~18 hardcoded SQL templates for the most common ARGO question types.
 
 Each template is a dict with:
   - keywords : list of trigger keyword sets (any set fully matching → route here)
@@ -15,7 +15,32 @@ from __future__ import annotations
 
 TEMPLATES: list[dict] = [
 
-    # 1. Average SST in a region
+    # 1. "Surprise me" — picks a random active float and summarizes its journey
+    {
+        "id": "surprise_float",
+        "description": "Random active float journey and story",
+        "keywords": [
+            {"surprise"},
+            {"surprise", "me"},
+            {"random", "float"},
+            {"random", "active"},
+            {"pick", "random"},
+            {"story", "float"},
+        ],
+        "sql": """
+SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.project_name, fm.pi_name,
+       fm.is_bgc, fm.deploy_date, fm.deploy_lat, fm.deploy_lon,
+       tp.cycle_number, tp.lat, tp.lon, tp.timestamp
+FROM float_metadata fm
+JOIN trajectory_points tp ON tp.float_id = fm.id
+WHERE fm.status = 'active'
+ORDER BY RANDOM()
+LIMIT 1;
+""",
+        "params": [],
+    },
+
+    # 2. Average SST in a region
     {
         "id": "avg_sst_region",
         "description": "Average sea surface temperature in a geographic region",
@@ -41,7 +66,7 @@ LIMIT 5000;
         "params": ["lat_min", "lat_max", "lon_min", "lon_max", "date_start", "date_end"],
     },
 
-    # 2. Salinity in a region over time
+    # 3. Salinity in a region over time
     {
         "id": "salinity_region",
         "description": "Average salinity in a geographic region over time",
@@ -65,7 +90,74 @@ LIMIT 5000;
         "params": ["lat_min", "lat_max", "lon_min", "lon_max", "date_start", "date_end"],
     },
 
-    # 3. Float trajectory
+    # 4. Compare two floats
+    {
+        "id": "compare_floats",
+        "description": "Mean temperature vs depth for two floats",
+        "keywords": [{"compare", "float"}, {"compare", "floats"}, {"compare", "wmo"},
+                     {"compare"}, {"difference", "float"}, {"versus", "float"}],
+        "sql": """
+SELECT fm.wmo_id,
+       CAST(ROUND(p.pressure / 100) * 100 AS INTEGER) AS pressure_bin,
+       ROUND(AVG(p.temperature), 3) AS avg_temp,
+       ROUND(AVG(p.salinity), 4) AS avg_sal
+FROM profiles p
+JOIN float_metadata fm ON p.float_id = fm.id
+WHERE fm.wmo_id IN ('{wmo_id_1}', '{wmo_id_2}')
+GROUP BY fm.wmo_id, pressure_bin
+ORDER BY fm.wmo_id, pressure_bin
+LIMIT 5000;
+""",
+        "params": ["wmo_id_1", "wmo_id_2"],
+    },
+
+    # 5. Thermocline depth (max temperature gradient) & MLD
+    {
+        "id": "thermocline_depth",
+        "description": "Approximate thermocline depth and MLD for a float",
+        "keywords": [{"thermocline"}, {"mld"}, {"mixed", "layer"},
+                     {"thermocline", "mld"}, {"thermocline", "depth"},
+                     {"thermocline", "float"}, {"mld", "float"}],
+        "sql": """
+SELECT sub.pressure AS thermocline_depth_dbar,
+       ROUND(sub.dt, 3) AS max_temperature_gradient_c_per_dbar
+FROM (
+    SELECT p.pressure, p.temperature,
+           p.temperature - LAG(p.temperature) OVER (ORDER BY p.pressure) AS dt
+    FROM profiles p
+    JOIN float_metadata fm ON p.float_id = fm.id
+    WHERE fm.wmo_id = '{wmo_id}'
+      AND p.temperature IS NOT NULL
+    ORDER BY p.pressure
+) sub
+WHERE sub.dt IS NOT NULL
+ORDER BY ABS(sub.dt) DESC
+LIMIT 1;
+""",
+        "params": ["wmo_id"],
+    },
+
+    # 6. Depth profile (T/S vs pressure) with QC flags
+    {
+        "id": "depth_profile",
+        "description": "Temperature/salinity vs depth for a specific float",
+        "keywords": [{"depth", "profile"}, {"pressure", "temperature"},
+                     {"profile", "float"}, {"depth", "float"},
+                     {"flags", "float"}, {"qc", "float"}, {"raw", "float"},
+                     {"profiles", "flags"}],
+        "sql": """
+SELECT p.pressure, p.temperature, p.salinity,
+       p.temperature_qc, p.salinity_qc, p.timestamp
+FROM profiles p
+JOIN float_metadata fm ON p.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+ORDER BY p.pressure
+LIMIT 5000;
+""",
+        "params": ["wmo_id"],
+    },
+
+    # 7. Float trajectory
     {
         "id": "float_trajectory",
         "description": "Surfacing path of a specific float",
@@ -83,47 +175,7 @@ LIMIT 5000;
         "params": ["wmo_id"],
     },
 
-    # 4. Depth profile (T/S vs pressure) for a float cycle
-    {
-        "id": "depth_profile",
-        "description": "Temperature/salinity vs depth for a specific float and cycle",
-        "keywords": [{"depth", "profile"}, {"pressure", "temperature"},
-                     {"profile", "float"}, {"depth", "float"}],
-        "sql": """
-SELECT p.pressure, p.temperature, p.salinity,
-       p.temperature_qc, p.salinity_qc, p.timestamp
-FROM profiles p
-JOIN float_metadata fm ON p.float_id = fm.id
-WHERE fm.wmo_id = '{wmo_id}'
-  AND p.cycle_number = {cycle_number}
-ORDER BY p.pressure
-LIMIT 5000;
-""",
-        "params": ["wmo_id", "cycle_number"],
-    },
-
-    # 5. Compare two floats
-    {
-        "id": "compare_floats",
-        "description": "Mean temperature vs depth for two floats",
-        "keywords": [{"compare", "float"}, {"compare", "wmo"},
-                     {"difference", "float"}, {"versus", "float"}],
-        "sql": """
-SELECT fm.wmo_id,
-       CAST(ROUND(p.pressure / 100) * 100 AS INTEGER) AS pressure_bin,
-       ROUND(AVG(p.temperature), 3) AS avg_temp,
-       ROUND(AVG(p.salinity), 4) AS avg_sal
-FROM profiles p
-JOIN float_metadata fm ON p.float_id = fm.id
-WHERE fm.wmo_id IN ('{wmo_id_1}', '{wmo_id_2}')
-GROUP BY fm.wmo_id, pressure_bin
-ORDER BY fm.wmo_id, pressure_bin
-LIMIT 5000;
-""",
-        "params": ["wmo_id_1", "wmo_id_2"],
-    },
-
-    # 6. List active floats
+    # 8. List active floats
     {
         "id": "list_active_floats",
         "description": "List of all active floats",
@@ -141,55 +193,15 @@ LIMIT 5000;
         "params": [],
     },
 
-    # 7. BGC — chlorophyll profile
-    {
-        "id": "chlorophyll_profile",
-        "description": "Chlorophyll-a concentration vs depth for a BGC float",
-        "keywords": [{"chlorophyll", "depth"}, {"chlorophyll", "profile"},
-                     {"chla", "depth"}, {"algae", "depth"}],
-        "sql": """
-SELECT b.pressure, b.chlorophyll, b.chlorophyll_qc,
-       b.timestamp, b.lat, b.lon
-FROM bgc_profiles b
-JOIN float_metadata fm ON b.float_id = fm.id
-WHERE fm.wmo_id = '{wmo_id}'
-  AND b.chlorophyll IS NOT NULL
-ORDER BY b.pressure
-LIMIT 5000;
-""",
-        "params": ["wmo_id"],
-    },
-
-    # 8. BGC — dissolved oxygen trend
-    {
-        "id": "oxygen_trend",
-        "description": "Dissolved oxygen trend at a depth range in a region",
-        "keywords": [{"oxygen", "trend"}, {"dissolved", "oxygen"},
-                     {"o2", "depth"}, {"hypoxia"}],
-        "sql": """
-SELECT strftime('%Y-%m', b.timestamp) AS month,
-       AVG(b.dissolved_oxygen) AS avg_oxygen_umolkg
-FROM bgc_profiles b
-WHERE b.lat BETWEEN {lat_min} AND {lat_max}
-  AND b.lon BETWEEN {lon_min} AND {lon_max}
-  AND b.pressure BETWEEN {p_min} AND {p_max}
-GROUP BY month
-ORDER BY month
-LIMIT 5000;
-""",
-        "params": ["lat_min", "lat_max", "lon_min", "lon_max", "p_min", "p_max"],
-    },
-
-    # 9. BGC — list BGC floats
+    # 9. List BGC floats
     {
         "id": "list_bgc_floats",
-        "description": "List all active BGC floats",
-        "keywords": [{"bgc", "float"}, {"biogeochemical"}, {"bgc", "list"},
-                     {"oxygen", "float"}, {"chlorophyll", "float"},
-                     {"show", "bgc"}, {"bgc", "map"}],
+        "description": "List of all active BioGeoChemical (BGC) ARGO floats",
+        "keywords": [{"bgc", "float"}, {"biogeochemical", "float"}, {"oxygen", "float"},
+                     {"chlorophyll", "float"}, {"sensors", "float"}],
         "sql": """
 SELECT wmo_id, dac, platform_type, deploy_date,
-       deploy_lat, deploy_lon
+       deploy_lat, deploy_lon, status
 FROM float_metadata
 WHERE is_bgc = 1 AND status = 'active'
 ORDER BY deploy_date DESC
@@ -198,45 +210,69 @@ LIMIT 5000;
         "params": [],
     },
 
-    # 10. Temperature anomaly vs long-term mean
+    # 10. Deepest profile by float
     {
-        "id": "temp_anomaly",
-        "description": "Monthly temperature anomaly relative to long-term mean",
-        "keywords": [{"anomaly", "temperature"}, {"warming", "trend"},
-                     {"temperature", "change"}, {"heat", "anomaly"}],
+        "id": "deepest_profile",
+        "description": "Maximum depth reached by each float",
+        "keywords": [{"deepest", "float"}, {"maximum", "depth"}, {"max", "pressure"},
+                     {"depth", "record"}],
         "sql": """
-WITH monthly AS (
-    SELECT strftime('%Y-%m', timestamp) AS month,
-           ROUND(AVG(temperature), 3) AS avg_temp
-    FROM profiles
-    WHERE lat BETWEEN {lat_min} AND {lat_max}
-      AND lon BETWEEN {lon_min} AND {lon_max}
-      AND pressure BETWEEN 0 AND 10
-    GROUP BY month
-),
-long_term AS (
-    SELECT AVG(avg_temp) AS climatology FROM monthly
-)
-SELECT m.month,
-       m.avg_temp,
-       ROUND(m.avg_temp - lt.climatology, 3) AS anomaly
-FROM monthly m, long_term lt
-ORDER BY m.month
-LIMIT 5000;
+SELECT fm.wmo_id,
+       ROUND(MAX(p.pressure), 1) AS max_pressure_dbar,
+       COUNT(DISTINCT p.cycle_number) AS total_cycles
+FROM profiles p
+JOIN float_metadata fm ON p.float_id = fm.id
+GROUP BY fm.wmo_id
+ORDER BY max_pressure_dbar DESC
+LIMIT 20;
 """,
-        "params": ["lat_min", "lat_max", "lon_min", "lon_max"],
+        "params": [],
     },
 
-    # 11. Floats in a bounding box
+    # 11. BGC Dissolved Oxygen profile
     {
-        "id": "floats_in_region",
-        "description": "Floats observed in a geographic bounding box",
-        "keywords": [{"float", "region"}, {"float", "area"}, {"float", "location"},
-                     {"float", "bay"}, {"float", "arabian"}, {"float", "bengal"},
-                     {"map", "float"}, {"map", "show"}],
+        "id": "bgc_doxy_profile",
+        "description": "Dissolved oxygen vs depth for a BGC float",
+        "keywords": [{"dissolved", "oxygen"}, {"oxygen", "profile"}, {"doxy", "profile"},
+                     {"oxygen", "depth"}],
         "sql": """
-SELECT DISTINCT fm.wmo_id, fm.dac, fm.platform_type, fm.is_bgc,
-       tp.lat, tp.lon, tp.timestamp
+SELECT bgc.pressure, bgc.doxy, bgc.doxy_qc, bgc.timestamp
+FROM bgc_profiles bgc
+JOIN float_metadata fm ON bgc.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+  AND bgc.doxy IS NOT NULL
+ORDER BY bgc.pressure
+LIMIT 5000;
+""",
+        "params": ["wmo_id"],
+    },
+
+    # 12. BGC Chlorophyll profile
+    {
+        "id": "bgc_chla_profile",
+        "description": "Chlorophyll-A vs depth for a BGC float",
+        "keywords": [{"chlorophyll", "profile"}, {"chla", "profile"}, {"chlorophyll", "depth"}],
+        "sql": """
+SELECT bgc.pressure, bgc.chla, bgc.chla_qc, bgc.timestamp
+FROM bgc_profiles bgc
+JOIN float_metadata fm ON bgc.float_id = fm.id
+WHERE fm.wmo_id = '{wmo_id}'
+  AND bgc.chla IS NOT NULL
+ORDER BY bgc.pressure
+LIMIT 5000;
+""",
+        "params": ["wmo_id"],
+    },
+
+    # 13. Regional float positions
+    {
+        "id": "regional_float_positions",
+        "description": "Recent float surfacing positions in a geographic region",
+        "keywords": [{"floats", "in"}, {"floats", "near"}, {"where", "floats"},
+                     {"positions", "in"}, {"active", "in"}, {"which", "floats"}],
+        "sql": """
+SELECT fm.wmo_id, fm.is_bgc, fm.dac,
+       tp.lat, tp.lon, tp.timestamp, tp.cycle_number
 FROM trajectory_points tp
 JOIN float_metadata fm ON tp.float_id = fm.id
 WHERE tp.lat BETWEEN {lat_min} AND {lat_max}
@@ -248,42 +284,20 @@ LIMIT 5000;
         "params": ["lat_min", "lat_max", "lon_min", "lon_max", "date_start", "date_end"],
     },
 
-    # 12. Thermocline depth (max temperature gradient)
-    {
-        "id": "thermocline_depth",
-        "description": "Approximate thermocline depth for a float cycle",
-        "keywords": [{"thermocline"}, {"mixed layer"}, {"mld"}, {"thermocline", "depth"}],
-        "sql": """
-SELECT sub.pressure AS thermocline_depth_dbar
-FROM (
-    SELECT pressure, temperature,
-           temperature - LAG(temperature) OVER (ORDER BY pressure) AS dt
-    FROM profiles p
-    JOIN float_metadata fm ON p.float_id = fm.id
-    WHERE fm.wmo_id = '{wmo_id}'
-      AND p.cycle_number = {cycle_number}
-      AND p.temperature IS NOT NULL
-    ORDER BY pressure
-) sub
-ORDER BY ABS(sub.dt) DESC
-LIMIT 1;
-""",
-        "params": ["wmo_id", "cycle_number"],
-    },
-
-    # 13. Float summary (latest cycle)
+    # 14. Float summary
     {
         "id": "float_summary",
-        "description": "Latest cycle summary for a specific float",
+        "description": "Summary for a specific float",
         "keywords": [{"float", "summary"}, {"float", "latest"}, {"float", "last"},
                      {"float", "recent"}, {"float", "current"}, {"float", "info"},
-                     {"float", "details"}, {"float", "status"}],
+                     {"float", "details"}, {"float", "status"}, {"tell", "float"}],
         "sql": """
-SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.status,
-       tp.cycle_number, tp.timestamp, tp.lat, tp.lon,
-       tp.predicted_next_lat, tp.predicted_next_lon
-FROM trajectory_points tp
-JOIN float_metadata fm ON tp.float_id = fm.id
+SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.project_name, fm.pi_name,
+       fm.is_bgc, fm.deploy_date, fm.status,
+       tp.cycle_number AS last_cycle, tp.lat AS last_lat, tp.lon AS last_lon,
+       tp.timestamp AS last_surfacing
+FROM float_metadata fm
+JOIN trajectory_points tp ON tp.float_id = fm.id
 WHERE fm.wmo_id = '{wmo_id}'
 ORDER BY tp.cycle_number DESC
 LIMIT 1;
@@ -291,61 +305,7 @@ LIMIT 1;
         "params": ["wmo_id"],
     },
 
-    # 14. Nitrate profile (BGC)
-    {
-        "id": "nitrate_profile",
-        "description": "Nitrate concentration vs depth for a BGC float",
-        "keywords": [{"nitrate", "depth"}, {"nitrate", "profile"}, {"no3", "depth"}],
-        "sql": """
-SELECT b.pressure, b.nitrate, b.nitrate_qc
-FROM bgc_profiles b
-JOIN float_metadata fm ON b.float_id = fm.id
-WHERE fm.wmo_id = '{wmo_id}'
-  AND b.nitrate IS NOT NULL
-ORDER BY b.pressure
-LIMIT 5000;
-""",
-        "params": ["wmo_id"],
-    },
-
-    # 15. pH profile (BGC)
-    {
-        "id": "ph_profile",
-        "description": "pH vs depth for a BGC float",
-        "keywords": [{"ph", "depth"}, {"ph", "profile"}, {"acidification"}],
-        "sql": """
-SELECT b.pressure, b.ph, b.ph_qc, b.timestamp
-FROM bgc_profiles b
-JOIN float_metadata fm ON b.float_id = fm.id
-WHERE fm.wmo_id = '{wmo_id}'
-  AND b.ph IS NOT NULL
-ORDER BY b.pressure
-LIMIT 5000;
-""",
-        "params": ["wmo_id"],
-    },
-
-    # 16. "Tell me about float X" — triggered by map popup
-    {
-        "id": "float_about",
-        "description": "Overview of a specific float including latest position and key measurements",
-        "keywords": [{"tell", "float"}, {"about", "float"}, {"describe", "float"},
-                     {"what", "float"}, {"information", "float"}],
-        "sql": """
-SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.status, fm.is_bgc,
-       tp.cycle_number, tp.timestamp, tp.lat, tp.lon,
-       tp.predicted_next_lat, tp.predicted_next_lon,
-       tp.prediction_confidence
-FROM trajectory_points tp
-JOIN float_metadata fm ON tp.float_id = fm.id
-WHERE fm.wmo_id = '{wmo_id}'
-ORDER BY tp.cycle_number DESC
-LIMIT 1;
-""",
-        "params": ["wmo_id"],
-    },
-
-    # 17. "Ocean data near lat, lon" — triggered by map popup
+    # 15. Ocean data near lat, lon
     {
         "id": "nearby_data",
         "description": "Recent ocean observations near a geographic coordinate",
@@ -366,23 +326,5 @@ ORDER BY month
 LIMIT 5000;
 """,
         "params": ["lat_min", "lat_max", "lon_min", "lon_max"],
-    },
-
-    # 18. "Surprise me" — picks a random active float and summarizes its journey
-    {
-        "id": "surprise_float",
-        "description": "Random active float journey and story",
-        "keywords": [{"surprise"}, {"surprise", "me"}, {"random", "float"}, {"pick", "random"}, {"story", "float"}],
-        "sql": """
-SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.project_name, fm.pi_name,
-       fm.is_bgc, fm.deploy_date, fm.deploy_lat, fm.deploy_lon,
-       tp.cycle_number, tp.lat, tp.lon, tp.timestamp
-FROM float_metadata fm
-JOIN trajectory_points tp ON tp.float_id = fm.id
-WHERE fm.status = 'active'
-ORDER BY RANDOM()
-LIMIT 1;
-""",
-        "params": [],
     },
 ]

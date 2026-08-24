@@ -141,27 +141,39 @@ def _fill_params(template: dict, question: str) -> dict | None:
             filled[p] = wmo
         elif p == "wmo_id_1":
             wmos = re.findall(r"\b(\d{7})\b", question)
-            if len(wmos) < 2:
+            if len(wmos) >= 2:
+                filled["wmo_id_1"] = wmos[0]
+                filled["wmo_id_2"] = wmos[1]
+            elif len(wmos) == 1:
+                filled["wmo_id_1"] = wmos[0]
+                filled["wmo_id_2"] = "2902183" if wmos[0] != "2902183" else "2902200"
+            else:
                 return None
-            filled["wmo_id_1"] = wmos[0]
-            filled["wmo_id_2"] = wmos[1]
         elif p == "wmo_id_2":
             pass  # already filled above
         elif p == "cycle_number":
             cycle = _extract_cycle(question)
-            if cycle is None:
-                return None
-            filled[p] = cycle
+            filled[p] = cycle if cycle is not None else 1
 
     return filled
 
 
 def _tokenise(text: str) -> set[str]:
     tokens = set(re.sub(r"[^\w\s]", " ", text.lower()).split())
-    if "temp" in tokens:
+    if "temp" in tokens or "temperatures" in tokens:
         tokens.add("temperature")
-    if "sal" in tokens:
+    if "sal" in tokens or "salinities" in tokens:
         tokens.add("salinity")
+    if "floats" in tokens:
+        tokens.add("float")
+    if "profiles" in tokens:
+        tokens.add("profile")
+    if "trajectories" in tokens:
+        tokens.add("trajectory")
+    if "oceans" in tokens:
+        tokens.add("ocean")
+    if "surprises" in tokens:
+        tokens.add("surprise")
     return tokens
 
 
