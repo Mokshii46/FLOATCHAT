@@ -177,8 +177,7 @@ def shape_results(rows: list[dict]) -> dict:
         }
     """
     viz_type = detect_viz_type(rows)
-    logger.info("Shaping %d rows as viz_type='%s'", len(rows), viz_type)
-
+    serialized_rows = _serialise(rows)
     if viz_type == "map":
         data = to_geojson(rows)
     elif viz_type == "depth_profile":
@@ -188,10 +187,14 @@ def shape_results(rows: list[dict]) -> dict:
     elif viz_type == "stat_card":
         data = to_stat_card(rows)
     else:
-        # Serialise for table display
-        data = {"rows": _serialise(rows)}
+        data = {"rows": serialized_rows}
 
-    return {"viz_type": viz_type, "data": data, "row_count": len(rows)}
+    return {
+        "viz_type": viz_type,
+        "data": data,
+        "raw_rows": serialized_rows,
+        "row_count": len(rows),
+    }
 
 
 def _serialise(rows: list[dict]) -> list[dict]:

@@ -1,9 +1,9 @@
 import React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Code2, Database, Cpu } from 'lucide-react'
+import { Code2, Database, Cpu, GraduationCap, Building2, User, Layers, Info } from 'lucide-react'
 
 /**
- * USP 5 — Shows the generated SQL, routing source, and reasoning.
+ * USP 5 & Academic Provenance — Shows generated SQL, routing, and institutional provenance.
  */
 export default function ExplainabilityPanel({ payload }) {
   const { t } = useTranslation()
@@ -12,6 +12,7 @@ export default function ExplainabilityPanel({ payload }) {
   const {
     source, template_id, template_description,
     params_used, sql, rag_context_snippet, reasoning,
+    provenance,
   } = payload
 
   return (
@@ -44,6 +45,45 @@ export default function ExplainabilityPanel({ payload }) {
             <span>{t('explain_sql')}</span>
           </div>
           <pre className="explain-sql">{sql.trim()}</pre>
+        </div>
+      )}
+
+      {/* ── Academic Provenance Footer ─────────────────────────── */}
+      {provenance && (
+        <div className="provenance-footer">
+          <div className="provenance-header">
+            <GraduationCap size={14} />
+            <span>Academic Provenance & Attribution</span>
+          </div>
+          <div className="provenance-grid">
+            <div className="provenance-item">
+              <User size={12} />
+              <span className="prov-label">PI:</span>
+              <span className="prov-val">{provenance.pi_name}</span>
+            </div>
+            <div className="provenance-item">
+              <Building2 size={12} />
+              <span className="prov-label">DAC:</span>
+              <span className="prov-val">{provenance.dac}</span>
+            </div>
+            <div className="provenance-item">
+              <Layers size={12} />
+              <span className="prov-label">Project:</span>
+              <span className="prov-val">{provenance.project_name}</span>
+            </div>
+            {provenance.platform_type && (
+              <div className="provenance-item">
+                <Info size={12} />
+                <span className="prov-label">Platform:</span>
+                <span className="prov-val">{provenance.platform_type}</span>
+              </div>
+            )}
+          </div>
+          {provenance.citation && (
+            <div className="provenance-citation">
+              {provenance.citation}
+            </div>
+          )}
         </div>
       )}
     </div>

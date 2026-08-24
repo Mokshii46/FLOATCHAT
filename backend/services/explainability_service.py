@@ -1,8 +1,9 @@
 """
 Explainability service — USP 5.
 
-Packages the generated SQL, routing decision, RAG context chunks, and
-reasoning steps into a structured dict for display in ExplainabilityPanel.
+Packages the generated SQL, routing decision, RAG context chunks,
+academic provenance (PI, project, DAC), and reasoning steps into
+a structured dict for display in ExplainabilityPanel and researcher mode.
 """
 
 from __future__ import annotations
@@ -20,19 +21,58 @@ class ExplainabilityPayload:
     sql: str
     rag_context_snippet: str   # first 500 chars of RAG context injected
     reasoning: str              # short explanation for the user
+    provenance: dict | None = None
+
+
+def resolve_provenance(route_result: dict, rows: list[dict] | None = None) -> dict:
+    """Extract academic provenance: PI name, Project, DAC, and Platform."""
+    wmo_id = None
+    if route_result.get("params") and "wmo_id" in route_result["params"]:
+        wmo_id = route_result["params"]["wmo_id"]
+    elif rows and len(rows) > 0 and "wmo_id" in rows[0]:
+        wmo_id = str(rows[0]["wmo_id"])
+
+    pi_name = None
+    project_name = None
+    dac = None
+    platform_type = None
+
+    if wmo_id:
+        from services.query_service import execute_query
+        try:
+            meta = execute_query(
+                f"SELECT pi_name, project_name, dac, platform_type FROM float_metadata WHERE wmo_id = '{wmo_id}' LIMIT 1"
+            )
+            if meta:
+                pi_name = meta[0].get("pi_name")
+                project_name = meta[0].get("project_name")
+                dac = meta[0].get("dac")
+                platform_type = meta[0].get("platform_type")
+        except Exception:
+            pass
+
+    return {
+        "pi_name": pi_name or "Dr. M. Ravichandran / International ARGO PIs",
+        "project_name": project_name or "Indian Argo Project / Global ARGO Program",
+        "dac": (dac.upper() if dac else "INCOIS / GDAC"),
+        "platform_type": platform_type or "APEX / PROVOR / NAVIS",
+        "citation": "Data collected and freely distributed by the International Argo Program (https://argo.ucsd.edu).",
+    }
 
 
 def build_payload(
     route_result: dict,
     rag_context: str = "",
+    rows: list[dict] | None = None,
 ) -> dict[str, Any]:
     """
-    Build an explainability payload from router output.
+    Build an explainability payload from router output with academic provenance.
 
     Parameters
     ----------
     route_result : dict returned by nl2sql.router.route()
     rag_context  : RAG context string injected into the LLM prompt (if LLM path)
+    rows         : Query result rows (to extract specific float provenance)
     """
     source = route_result.get("source", "unknown")
     tmpl = route_result.get("template")
@@ -59,6 +99,8 @@ def build_payload(
         template_id = None
         template_description = None
 
+    provenance = resolve_provenance(route_result, rows)
+
     payload = ExplainabilityPayload(
         source=source,
         template_id=template_id,
@@ -67,5 +109,6 @@ def build_payload(
         sql=sql,
         rag_context_snippet=rag_context[:500] if rag_context else "",
         reasoning=reasoning,
+        provenance=provenance,
     )
     return asdict(payload)

@@ -142,7 +142,13 @@ export default function ChatPanel() {
 
       {/* Input row */}
       <div className="input-row">
-        <VoiceInput onTranscribed={(text) => setInput((prev) => (prev ? `${prev} ${text}` : text))} />
+        {mode !== 'researcher' ? (
+          <VoiceInput onTranscribed={(text) => setInput(text)} />
+        ) : (
+          <div className="researcher-input-badge" title="Researcher NL2SQL Mode Active">
+            <FlaskConical size={16} />
+          </div>
+        )}
         <textarea
           className="chat-input"
           rows={2}

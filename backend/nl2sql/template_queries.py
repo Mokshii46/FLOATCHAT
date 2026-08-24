@@ -367,4 +367,22 @@ LIMIT 5000;
 """,
         "params": ["lat_min", "lat_max", "lon_min", "lon_max"],
     },
+
+    # 18. "Surprise me" — picks a random active float and summarizes its journey
+    {
+        "id": "surprise_float",
+        "description": "Random active float journey and story",
+        "keywords": [{"surprise"}, {"surprise", "me"}, {"random", "float"}, {"pick", "random"}, {"story", "float"}],
+        "sql": """
+SELECT fm.wmo_id, fm.dac, fm.platform_type, fm.project_name, fm.pi_name,
+       fm.is_bgc, fm.deploy_date, fm.deploy_lat, fm.deploy_lon,
+       tp.cycle_number, tp.lat, tp.lon, tp.timestamp
+FROM float_metadata fm
+JOIN trajectory_points tp ON tp.float_id = fm.id
+WHERE fm.status = 'active'
+ORDER BY RANDOM()
+LIMIT 1;
+""",
+        "params": [],
+    },
 ]

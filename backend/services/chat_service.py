@@ -158,8 +158,8 @@ def process_chat(
         except Exception as exc:
             logger.debug("Anomaly check skipped: %s", exc)
 
-    # 9. Explainability
-    explain = build_payload(route_result, rag_context)
+    # 9. Explainability & Academic Provenance
+    explain = build_payload(route_result, rag_context, rows=rows)
 
     return {
         "answer": answer,

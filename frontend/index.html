@@ -911,6 +911,11 @@
       }
       .session-delete-btn:hover { color: var(--critical-border); }
 
+      /* ── Leaflet Container ──────────────────────────────────── */
+      .leaflet-container {
+        background-color: #aad3df !important;
+      }
+
       /* ── Map Legend ──────────────────────────────────────────── */
       .map-legend {
         position: absolute;
@@ -992,6 +997,401 @@
         transition: opacity 0.15s;
       }
       .popup-action-btn:hover { opacity: 0.85; }
+
+      /* ── Ocean Labels on Map ──────────────────────────────────── */
+      .ocean-label-wrapper {
+        background: transparent !important;
+        border: none !important;
+      }
+      .ocean-map-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 10px;
+        border-radius: 20px;
+        background: rgba(10, 22, 40, 0.85);
+        border: 1px solid rgba(20, 184, 166, 0.5);
+        backdrop-filter: blur(6px);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45), 0 0 12px rgba(13, 148, 136, 0.25);
+        cursor: pointer;
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        white-space: nowrap;
+        pointer-events: auto;
+      }
+      .ocean-map-label:hover {
+        transform: scale(1.08);
+        background: rgba(13, 148, 136, 0.95);
+        border-color: #14b8a6;
+        box-shadow: 0 6px 18px rgba(13, 148, 136, 0.5);
+      }
+      .ocean-map-label .ocean-icon {
+        font-size: 13px;
+      }
+      .ocean-map-label .ocean-name-text {
+        font-family: 'DM Serif Display', Georgia, serif;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        color: #e8ecf4;
+        font-weight: 500;
+        text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+      }
+      .ocean-map-label.sea {
+        border-color: rgba(212, 165, 116, 0.55);
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45), 0 0 10px rgba(212, 165, 116, 0.25);
+      }
+      .ocean-map-label.sea:hover {
+        background: rgba(212, 165, 116, 0.95);
+        border-color: #d4a574;
+      }
+      .ocean-map-label.sea .ocean-name-text {
+        color: #fef3c7;
+      }
+      .ocean-popup-header {
+        font-family: 'DM Serif Display', Georgia, serif;
+        font-size: 15px;
+        color: #0d9488;
+        margin-bottom: 4px;
+        display: flex;
+        align-items: center;
+      }
+      .ocean-popup-desc {
+        font-size: 11px;
+        color: #4b5563;
+        margin-bottom: 8px;
+        line-height: 1.4;
+      }
+
+      /* ── Focused Float Tag ──────────────────────────────────── */
+      .focused-float-tag {
+        background: rgba(245, 158, 11, 0.15);
+        color: #fbbf24;
+        border: 1px solid rgba(245, 158, 11, 0.4);
+        padding: 0.1rem 0.45rem;
+        border-radius: 12px;
+        font-size: 0.68rem;
+        font-weight: 600;
+        display: inline-flex;
+        align-items: center;
+      }
+
+      /* ── Ocean Fact Card (Explorer Mode) ─────────────────────── */
+      .ocean-fact-card {
+        margin-top: 0.5rem;
+        background: linear-gradient(135deg, rgba(6,182,212,0.1) 0%, rgba(99,102,241,0.08) 100%);
+        border: 1px solid rgba(6,182,212,0.22);
+        border-radius: var(--radius-sm);
+        padding: 0.45rem 0.75rem;
+        display: flex;
+        align-items: flex-start;
+        gap: 0.45rem;
+        font-size: 0.76rem;
+        color: #93c5fd;
+        line-height: 1.45;
+      }
+      .ocean-fact-card .fact-icon {
+        color: #06b6d4;
+        margin-top: 2px;
+        flex-shrink: 0;
+      }
+      .ocean-fact-card strong {
+        color: #38bdf8;
+      }
+
+      /* ── Universal Viz Control Bar (Map / Chart / Table) ───── */
+      .viz-control-bar {
+        background: var(--bg-panel);
+        border-bottom: 1px solid var(--border);
+        padding: 0.35rem 0.85rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        z-index: 10;
+        position: relative;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+      }
+      .viz-tabs {
+        display: flex;
+        gap: 0.35rem;
+      }
+      .viz-tab-btn {
+        background: var(--bg-deep);
+        border: 1px solid var(--border);
+        color: var(--text-secondary);
+        padding: 0.3rem 0.75rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.75rem;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        transition: all var(--transition-fast);
+      }
+      .viz-tab-btn:hover {
+        border-color: var(--accent);
+        color: var(--text-primary);
+        background: rgba(255,255,255,0.03);
+      }
+      .viz-tab-btn.active {
+        background: var(--accent-surface);
+        border-color: var(--accent);
+        color: var(--accent-bright);
+        font-weight: 600;
+      }
+      .viz-bar-info {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+      }
+      .researcher-info-pill {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.72rem;
+        color: #10b981;
+        background: rgba(16,185,129,0.1);
+        padding: 0.2rem 0.55rem;
+        border-radius: 12px;
+        border: 1px solid rgba(16,185,129,0.2);
+      }
+      .explorer-info-pill {
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        font-size: 0.72rem;
+        color: #38bdf8;
+        background: rgba(56,189,248,0.1);
+        padding: 0.2rem 0.55rem;
+        border-radius: 12px;
+        border: 1px solid rgba(56,189,248,0.2);
+      }
+
+      /* ── Researcher Input Badge ──────────────────────────────── */
+      .researcher-input-badge {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: var(--radius-sm);
+        background: rgba(245, 158, 11, 0.12);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.25);
+        flex-shrink: 0;
+      }
+
+      /* ── Guided Tour Walkthrough ─────────────────────────────── */
+      .tour-nav-btn {
+        background: rgba(6,182,212,0.12);
+        border: 1px solid rgba(6,182,212,0.3);
+        color: #38bdf8;
+        padding: 0.25rem 0.65rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.8rem;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        transition: all var(--transition-fast);
+      }
+      .tour-nav-btn:hover {
+        background: rgba(6,182,212,0.22);
+        border-color: #38bdf8;
+        color: #fff;
+      }
+
+      .tour-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(5, 10, 20, 0.75);
+        backdrop-filter: blur(4px);
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 1rem;
+        animation: bubbleIn 0.25s ease-out;
+      }
+      .tour-modal {
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-lg);
+        width: 100%;
+        max-width: 480px;
+        padding: 1.5rem;
+        position: relative;
+        box-shadow: 0 16px 40px rgba(0, 0, 0, 0.4);
+      }
+      .tour-close-btn {
+        position: absolute;
+        top: 1rem;
+        right: 1rem;
+        background: none;
+        border: none;
+        color: var(--text-muted);
+        cursor: pointer;
+        padding: 0.25rem;
+        border-radius: 4px;
+        transition: color var(--transition-fast);
+      }
+      .tour-close-btn:hover { color: var(--text-primary); }
+
+      .tour-header {
+        display: flex;
+        align-items: center;
+        gap: 0.85rem;
+        margin-bottom: 1rem;
+      }
+      .tour-icon-wrap {
+        width: 48px;
+        height: 48px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+      }
+      .tour-badge {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 700;
+        border: 1px solid;
+        padding: 0.1rem 0.4rem;
+        border-radius: 12px;
+      }
+      .tour-title {
+        font-family: 'DM Serif Display', Georgia, serif;
+        font-size: 1.25rem;
+        color: var(--text-primary);
+        margin: 0.2rem 0 0 0;
+      }
+      .tour-body {
+        font-size: 0.88rem;
+        color: var(--text-secondary);
+        line-height: 1.6;
+        min-height: 70px;
+      }
+      .tour-footer {
+        margin-top: 1.25rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        border-top: 1px solid var(--border);
+        padding-top: 1rem;
+      }
+      .tour-dots {
+        display: flex;
+        gap: 0.4rem;
+      }
+      .tour-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--border);
+        cursor: pointer;
+        transition: all var(--transition-fast);
+      }
+      .tour-dot.active {
+        background: var(--accent);
+        width: 18px;
+        border-radius: 10px;
+      }
+      .tour-actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+      .tour-btn {
+        padding: 0.4rem 0.85rem;
+        border-radius: var(--radius-sm);
+        font-size: 0.82rem;
+        font-weight: 500;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 0.35rem;
+        transition: all var(--transition-fast);
+      }
+      .tour-prev-btn {
+        background: var(--bg-deep);
+        border: 1px solid var(--border);
+        color: var(--text-secondary);
+      }
+      .tour-prev-btn:hover { color: var(--text-primary); }
+      .tour-next-btn {
+        background: var(--accent);
+        border: 1px solid var(--accent);
+        color: #fff;
+      }
+      .tour-next-btn:hover { opacity: 0.9; }
+
+      /* ── Surprise Me Chip (Explorer Mode) ────────────────────── */
+      .prompt-chip.surprise-chip {
+        background: linear-gradient(135deg, rgba(6,182,212,0.2) 0%, rgba(147,51,234,0.2) 100%);
+        border: 1px solid rgba(6,182,212,0.5);
+        color: #38bdf8;
+        font-weight: 600;
+        box-shadow: 0 2px 8px rgba(6,182,212,0.15);
+        display: inline-flex;
+        align-items: center;
+      }
+      .prompt-chip.surprise-chip:hover:not(:disabled) {
+        background: linear-gradient(135deg, rgba(6,182,212,0.35) 0%, rgba(147,51,234,0.35) 100%);
+        border-color: #38bdf8;
+        color: #fff;
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(6,182,212,0.3);
+      }
+
+      /* ── Academic Provenance Footer (Researcher Mode) ────────── */
+      .provenance-footer {
+        margin-top: 0.65rem;
+        background: rgba(15, 23, 42, 0.6);
+        border: 1px solid rgba(79, 70, 229, 0.25);
+        border-radius: var(--radius-sm);
+        padding: 0.6rem 0.8rem;
+      }
+      .provenance-header {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.74rem;
+        font-weight: 600;
+        color: #a5b4fc;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        margin-bottom: 0.45rem;
+      }
+      .provenance-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 0.35rem 0.65rem;
+      }
+      .provenance-item {
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        font-size: 0.72rem;
+        color: var(--text-secondary);
+      }
+      .provenance-item .prov-label {
+        color: var(--text-muted);
+        font-weight: 600;
+      }
+      .provenance-item .prov-val {
+        color: #e2e8f0;
+        font-weight: 500;
+      }
+      .provenance-citation {
+        margin-top: 0.45rem;
+        padding-top: 0.35rem;
+        border-top: 1px solid rgba(255,255,255,0.06);
+        font-size: 0.68rem;
+        color: var(--text-muted);
+        font-style: italic;
+        line-height: 1.35;
+      }
 
       /* ═══════════════════════════════════════════════════════════
          HOME PAGE

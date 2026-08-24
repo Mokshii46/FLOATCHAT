@@ -19,27 +19,24 @@ router = APIRouter()
 
 @router.get("/map")
 def viz_map(
-    lat_min: float = Query(-60.0),
-    lat_max: float = Query(30.0),
-    lon_min: float = Query(20.0),
-    lon_max: float = Query(120.0),
+    lat_min: float = Query(-90.0),
+    lat_max: float = Query(90.0),
+    lon_min: float = Query(-180.0),
+    lon_max: float = Query(180.0),
 ) -> dict[str, Any]:
-    # SQLite-compatible: use GROUP BY + MAX() instead of DISTINCT ON
     sql = f"""
 SELECT fm.wmo_id, fm.platform_type, fm.is_bgc, fm.dac,
        tp.lat, tp.lon, tp.cycle_number, tp.timestamp,
        tp.predicted_next_lat, tp.predicted_next_lon
 FROM trajectory_points tp
 JOIN float_metadata fm ON tp.float_id = fm.id
+JOIN (
+    SELECT float_id, MAX(cycle_number) AS max_cycle
+    FROM trajectory_points
+    GROUP BY float_id
+) latest ON tp.float_id = latest.float_id AND tp.cycle_number = latest.max_cycle
 WHERE tp.lat BETWEEN {lat_min} AND {lat_max}
   AND tp.lon BETWEEN {lon_min} AND {lon_max}
-  AND tp.id IN (
-      SELECT tp2.id
-      FROM trajectory_points tp2
-      WHERE tp2.float_id = tp.float_id
-      ORDER BY tp2.cycle_number DESC
-      LIMIT 1
-  )
 LIMIT 5000;
 """
     rows = execute_query(sql)

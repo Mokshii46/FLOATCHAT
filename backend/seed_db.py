@@ -1,18 +1,19 @@
 """
-Seed the SQLite database with realistic sample ARGO float data.
+Seed the SQLite database with realistic sample ARGO float data evenly spread across all global water bodies.
 
-Run:  python seed_db.py
+Run:  python seed_db.py [--force]
 """
 
 from __future__ import annotations
 
 import random
 import math
-from datetime import datetime, timedelta
+import sys
+import argparse
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # Ensure we can import from the backend directory
-import sys
 sys.path.insert(0, str(Path(__file__).parent))
 
 from database import engine, Base, init_db
@@ -22,7 +23,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# ── Realistic float metadata ─────────────────────────────────────
+# ── Base realistic float metadata ─────────────────────────────────────
 
 FLOATS_DATA = [
     # Indian Ocean floats (INCOIS)
@@ -53,7 +54,7 @@ FLOATS_DATA = [
     # Dead / inactive floats
     {"wmo_id": "2901850", "dac": "incois", "platform_type": "ARVOR", "project_name": "Indian Argo", "pi_name": "M. Ravichandran", "deploy_lat": 11.2, "deploy_lon": 74.5, "is_bgc": False, "status": "dead"},
     {"wmo_id": "2901855", "dac": "incois", "platform_type": "APEX", "project_name": "Indian Argo", "pi_name": "S. Prakash", "deploy_lat": 9.8, "deploy_lon": 91.2, "is_bgc": False, "status": "dead"},
-    # More active floats for density
+    # More active floats
     {"wmo_id": "2902240", "dac": "incois", "platform_type": "ARVOR", "project_name": "Indian Argo", "pi_name": "M. Ravichandran", "deploy_lat": 7.2, "deploy_lon": 76.8, "is_bgc": False, "status": "active"},
     {"wmo_id": "2902245", "dac": "incois", "platform_type": "ARVOR", "project_name": "Indian Argo", "pi_name": "S. Prakash", "deploy_lat": 19.5, "deploy_lon": 70.2, "is_bgc": False, "status": "active"},
     {"wmo_id": "2902250", "dac": "incois", "platform_type": "PROVOR", "project_name": "Indian Argo BGC", "pi_name": "A. Chatterjee", "deploy_lat": 13.4, "deploy_lon": 60.1, "is_bgc": True, "status": "active"},
@@ -65,93 +66,207 @@ FLOATS_DATA = [
 ]
 
 
+def get_global_floats_data() -> list[dict]:
+    """
+    Generate an evenly spread, non-cluttered global ARGO fleet covering all major ocean basins.
+    Total ~350-400 floats across all world oceans.
+    """
+    floats = list(FLOATS_DATA)
+    existing_wmos = {f["wmo_id"] for f in floats}
+
+    # Clean water-bound oceanic basins (strictly avoiding landmasses)
+    global_basins = [
+        # --- INDIAN OCEAN BASIN ---
+        ("Arabian Sea", 10.0, 23.0, 56.0, 73.0, 18, 0.35, ["incois", "aoml", "coriolis"], ["M. Ravichandran", "S. Prakash", "V. Thierry"]),
+        ("Bay of Bengal", 8.0, 20.5, 82.0, 94.5, 18, 0.35, ["incois", "jma", "coriolis"], ["A. Chatterjee", "S. Prakash", "T. Suga"]),
+        ("Equatorial & Central Indian Ocean", -18.0, 5.0, 52.0, 95.0, 25, 0.30, ["incois", "aoml", "csiro", "jma"], ["M. Ravichandran", "R. Lumpkin", "S. Wijffels"]),
+        ("South Indian Ocean", -45.0, -20.0, 48.0, 108.0, 22, 0.25, ["csiro", "coriolis", "aoml"], ["S. Wijffels", "V. Thierry", "H. Claustre"]),
+        ("Mozambique Channel & West Indian", -24.0, 8.0, 39.0, 52.0, 14, 0.25, ["coriolis", "incois", "aoml"], ["V. Thierry", "M. Ravichandran", "R. Lumpkin"]),
+
+        # --- NORTH ATLANTIC OCEAN ---
+        ("Tropical North Atlantic", 8.0, 22.0, -58.0, -25.0, 20, 0.30, ["aoml", "coriolis"], ["R. Lumpkin", "V. Thierry"]),
+        ("Mid North Atlantic / Sargasso", 24.0, 44.0, -65.0, -28.0, 24, 0.30, ["aoml", "coriolis", "bodc"], ["R. Lumpkin", "V. Thierry", "M. Donnelly"]),
+        ("Subpolar North Atlantic", 46.0, 60.0, -48.0, -15.0, 18, 0.25, ["bodc", "coriolis", "meds"], ["M. Donnelly", "H. Claustre", "J. Tremblay"]),
+
+        # --- SOUTH ATLANTIC OCEAN ---
+        ("Tropical South Atlantic", -18.0, -2.0, -32.0, 4.0, 18, 0.25, ["aoml", "coriolis"], ["R. Lumpkin", "V. Thierry"]),
+        ("Central South Atlantic", -45.0, -20.0, -40.0, 10.0, 22, 0.25, ["coriolis", "aoml", "csiro"], ["H. Claustre", "R. Lumpkin", "S. Wijffels"]),
+
+        # --- NORTH PACIFIC OCEAN ---
+        ("Western North Pacific / Philippine Sea", 12.0, 32.0, 128.0, 155.0, 24, 0.30, ["jma", "kma", "aoml"], ["T. Suga", "K. Park", "R. Lumpkin"]),
+        ("Northwest Pacific / Kuroshio Extension", 34.0, 48.0, 145.0, 175.0, 20, 0.30, ["jma", "aoml"], ["T. Suga", "R. Lumpkin"]),
+        ("Central North Pacific (Hawaii Basin)", 15.0, 38.0, -175.0, -140.0, 24, 0.25, ["aoml", "jma"], ["R. Lumpkin", "T. Suga"]),
+        ("Eastern North Pacific / California Current", 22.0, 48.0, -145.0, -122.0, 20, 0.30, ["aoml", "meds"], ["R. Lumpkin", "J. Tremblay"]),
+
+        # --- SOUTH PACIFIC OCEAN ---
+        ("Western South Pacific / Coral Sea", -35.0, -12.0, 152.0, 178.0, 22, 0.30, ["csiro", "jma"], ["S. Wijffels", "T. Suga"]),
+        ("Central South Pacific Gyre", -38.0, -10.0, -170.0, -115.0, 24, 0.25, ["aoml", "csiro"], ["R. Lumpkin", "S. Wijffels"]),
+        ("Eastern South Pacific / Peru-Chile", -42.0, -12.0, -105.0, -78.0, 18, 0.25, ["aoml", "coriolis"], ["R. Lumpkin", "H. Claustre"]),
+
+        # --- SOUTHERN OCEAN (Circumpolar Ring) ---
+        ("Southern Ocean (Atlantic Sector)", -62.0, -50.0, -45.0, 18.0, 16, 0.35, ["coriolis", "aoml"], ["H. Claustre", "R. Lumpkin"]),
+        ("Southern Ocean (Indian Sector)", -62.0, -50.0, 35.0, 115.0, 18, 0.35, ["csiro", "coriolis", "incois"], ["S. Wijffels", "V. Thierry", "M. Ravichandran"]),
+        ("Southern Ocean (Pacific Sector)", -62.0, -50.0, 135.0, -85.0, 20, 0.30, ["csiro", "aoml"], ["S. Wijffels", "R. Lumpkin"]),
+
+        # --- ARCTIC & NORDIC SEAS ---
+        ("Norwegian & Greenland Sea", 64.0, 76.0, -8.0, 18.0, 14, 0.25, ["coriolis", "bodc", "meds"], ["V. Thierry", "M. Donnelly", "J. Tremblay"]),
+        ("Barents Sea & Arctic Basin", 71.0, 80.0, 24.0, 55.0, 12, 0.20, ["coriolis", "aoml"], ["V. Thierry", "R. Lumpkin"]),
+
+        # --- MEDITERRANEAN SEA ---
+        ("Mediterranean Sea", 33.5, 38.5, 3.0, 28.0, 12, 0.35, ["coriolis", "meds"], ["V. Thierry", "H. Claustre"]),
+    ]
+
+    random.seed(101)  # Fixed seed for perfectly reproducible, well-spaced float distribution
+    wmo_counter = 2905000
+
+    for reg_name, lat_min, lat_max, lon_min, lon_max, count, bgc_ratio, dacs, pis in global_basins:
+        for _ in range(count):
+            while str(wmo_counter) in existing_wmos:
+                wmo_counter += 1
+            wmo_id = str(wmo_counter)
+            existing_wmos.add(wmo_id)
+            wmo_counter += 1
+
+            dac = random.choice(dacs)
+            pi = random.choice(pis)
+
+            # Handle cross-antimeridian longitude ranges if needed
+            if lon_min > lon_max:
+                lon = random.choice([
+                    random.uniform(lon_min, 180.0),
+                    random.uniform(-180.0, lon_max)
+                ])
+            else:
+                lon = random.uniform(lon_min, lon_max)
+
+            lat = random.uniform(lat_min, lat_max)
+            is_bgc = random.random() < bgc_ratio
+            ptype = random.choice(["ARVOR", "APEX", "PROVOR", "NOVA", "SOLO"])
+            status = "active" if random.random() < 0.94 else "dead"
+
+            floats.append({
+                "wmo_id": wmo_id,
+                "dac": dac,
+                "platform_type": ptype,
+                "project_name": f"{dac.upper()} {reg_name}",
+                "pi_name": pi,
+                "deploy_lat": round(lat, 2),
+                "deploy_lon": round(lon, 2),
+                "is_bgc": is_bgc,
+                "status": status,
+            })
+
+    return floats
+
+
 def _random_qc():
     """Return a realistic QC flag."""
-    return random.choices(["1", "2", "3", "4"], weights=[80, 10, 5, 5])[0]
+    return random.choices(["1", "2", "3", "4"], weights=[82, 10, 5, 3])[0]
 
 
 def _gen_profile_values(lat: float, depth_m: float, month: int):
-    """Generate realistic T/S profiles based on location and depth."""
-    # Temperature: warm at surface, decreases with depth
-    # Tropical waters (~25-30°C surface), higher latitudes cooler
-    base_sst = 28.0 - abs(lat) * 0.25
-    # Seasonal variation
-    seasonal = 1.5 * math.sin((month - 3) * math.pi / 6)
-    surface_temp = base_sst + seasonal + random.gauss(0, 0.3)
+    """Generate realistic T/S profiles based on latitude, depth, and seasonality."""
+    abs_lat = abs(lat)
+    if abs_lat < 25:
+        base_sst = 28.0 - abs_lat * 0.25
+    elif abs_lat < 55:
+        base_sst = 22.0 - (abs_lat - 25) * 0.45
+    else:
+        base_sst = 6.0 - (abs_lat - 55) * 0.35
+        base_sst = max(-1.8, base_sst)
 
-    # Temperature decreases with depth (thermocline ~100-300m)
+    # Seasonal variation (opposite in southern hemisphere)
+    hemisphere_sign = 1 if lat >= 0 else -1
+    seasonal = 1.8 * math.sin((month - 3) * math.pi / 6) * hemisphere_sign
+    surface_temp = max(-1.8, base_sst + seasonal + random.gauss(0, 0.25))
+
+    # Temperature profile by depth
     if depth_m < 50:
         temp = surface_temp - depth_m * 0.01
     elif depth_m < 300:
-        temp = surface_temp - 0.5 - (depth_m - 50) * 0.05
+        temp = surface_temp - 0.5 - (depth_m - 50) * 0.045
     elif depth_m < 1000:
-        temp = surface_temp - 13.0 - (depth_m - 300) * 0.005
+        temp = surface_temp - 12.0 - (depth_m - 300) * 0.004
     else:
-        temp = 2.0 + random.gauss(0, 0.2)
+        temp = 1.8 + random.gauss(0, 0.15)
 
-    temp = max(1.0, temp + random.gauss(0, 0.1))
+    temp = max(-1.8, temp + random.gauss(0, 0.08))
 
-    # Salinity: typically 34-36 PSU, varies by region
-    base_sal = 35.0 + random.gauss(0, 0.1)
+    # Salinity profile (typically 33.5 - 37.0 PSU)
+    if abs_lat < 20:
+        base_sal = 35.2 + random.gauss(0, 0.1)
+    elif abs_lat < 40:
+        base_sal = 36.2 + random.gauss(0, 0.1)  # Subtropical high evaporation
+    else:
+        base_sal = 34.0 + random.gauss(0, 0.1)  # High-latitude freshening
+
     if depth_m < 100:
-        salinity = base_sal - 0.5 + random.gauss(0, 0.05)
+        salinity = base_sal - 0.3 + random.gauss(0, 0.04)
     else:
-        salinity = base_sal + 0.2 + random.gauss(0, 0.02)
+        salinity = base_sal + 0.1 + random.gauss(0, 0.02)
 
     return round(temp, 3), round(salinity, 4)
 
 
 def _gen_bgc_values(depth_m: float):
-    """Generate realistic BGC values."""
-    # Dissolved oxygen: higher at surface, minimum at ~500m
+    """Generate realistic BGC values (DO, Chlorophyll, pH, Nitrate)."""
     if depth_m < 100:
-        do = 220 + random.gauss(0, 10)
+        do = 230 + random.gauss(0, 8)
     elif depth_m < 500:
-        do = 220 - (depth_m - 100) * 0.3 + random.gauss(0, 5)
+        do = 230 - (depth_m - 100) * 0.32 + random.gauss(0, 4)
     else:
-        do = 100 + random.gauss(0, 10)
+        do = 110 + random.gauss(0, 8)
 
-    # Chlorophyll: peak at ~50-100m (DCM)
     if depth_m < 20:
-        chl = 0.15 + random.gauss(0, 0.05)
+        chl = 0.18 + random.gauss(0, 0.04)
     elif depth_m < 100:
-        chl = 0.5 + 0.8 * math.exp(-((depth_m - 70) ** 2) / 800) + random.gauss(0, 0.05)
+        chl = 0.55 + 0.75 * math.exp(-((depth_m - 65) ** 2) / 750) + random.gauss(0, 0.04)
     else:
-        chl = 0.01 + random.gauss(0, 0.005)
+        chl = 0.01 + random.gauss(0, 0.004)
     chl = max(0.001, chl)
 
-    # pH: slightly lower at depth
-    ph = 8.1 - depth_m * 0.0003 + random.gauss(0, 0.01)
+    ph = 8.12 - depth_m * 0.0003 + random.gauss(0, 0.01)
 
-    # Nitrate: low at surface, increases with depth
     if depth_m < 50:
-        nitrate = 0.5 + random.gauss(0, 0.2)
+        nitrate = 0.6 + random.gauss(0, 0.15)
     elif depth_m < 500:
-        nitrate = 0.5 + (depth_m - 50) * 0.04 + random.gauss(0, 1)
+        nitrate = 0.6 + (depth_m - 50) * 0.042 + random.gauss(0, 0.8)
     else:
-        nitrate = 20 + random.gauss(0, 2)
+        nitrate = 22 + random.gauss(0, 1.8)
     nitrate = max(0.01, nitrate)
 
     return round(do, 1), round(chl, 4), round(ph, 3), round(nitrate, 2)
 
 
-def seed():
-    """Populate the database with sample ARGO data."""
+def seed(force: bool = False):
+    """Populate the database with global ARGO data across all ocean basins."""
     init_db()
 
+    floats_to_insert = get_global_floats_data()
+
     with engine.connect() as conn:
-        # Check if data already exists
         result = conn.execute(text("SELECT COUNT(*) FROM float_metadata"))
         count = result.scalar()
-        if count and count > 5:
-            logger.info("Database already has %d floats. Skipping seed.", count)
+
+        if count and count >= len(floats_to_insert) and not force:
+            logger.info("Database already populated with %d floats. Skipping seed.", count)
             return
 
-        logger.info("Seeding database with %d floats...", len(FLOATS_DATA))
+        if force or (count and count > 0):
+            logger.info("Re-populating database with evenly distributed global float dataset...")
+            for tbl in ["bgc_profiles", "profiles", "trajectory_points", "float_metadata"]:
+                try:
+                    conn.execute(text(f"DELETE FROM {tbl}"))
+                except Exception:
+                    pass
+            conn.commit()
+
+        logger.info("Seeding database with %d floats globally...", len(floats_to_insert))
 
         # 1. Insert float_metadata
-        for fd in FLOATS_DATA:
-            deploy_date = (datetime.utcnow() - timedelta(days=random.randint(180, 1800))).strftime("%Y-%m-%d")
+        now_utc = datetime.now(timezone.utc)
+        for fd in floats_to_insert:
+            deploy_date = (now_utc - timedelta(days=random.randint(180, 1800))).strftime("%Y-%m-%d")
             conn.execute(text("""
                 INSERT OR IGNORE INTO float_metadata
                 (wmo_id, dac, platform_type, project_name, pi_name,
@@ -161,11 +276,11 @@ def seed():
             """), {**fd, "deploy_date": deploy_date, "is_bgc": 1 if fd["is_bgc"] else 0})
 
         conn.commit()
-        logger.info("Inserted %d floats.", len(FLOATS_DATA))
+        logger.info("Inserted %d floats into float_metadata.", len(floats_to_insert))
 
         # Get float IDs
         float_ids = {}
-        for fd in FLOATS_DATA:
+        for fd in floats_to_insert:
             result = conn.execute(
                 text("SELECT id, deploy_lat, deploy_lon, is_bgc FROM float_metadata WHERE wmo_id = :wmo"),
                 {"wmo": fd["wmo_id"]}
@@ -176,28 +291,28 @@ def seed():
                     "id": row[0], "lat": row[1], "lon": row[2], "is_bgc": row[3]
                 }
 
-        # 2. Insert trajectory_points (10-30 cycles per float)
+        # 2. Insert trajectory_points (8-16 cycles per float)
         logger.info("Generating trajectory points...")
         for wmo_id, info in float_ids.items():
             float_id = info["id"]
             lat = info["lat"]
             lon = info["lon"]
-            n_cycles = random.randint(10, 30)
+            n_cycles = random.randint(8, 16)
 
             for cycle in range(1, n_cycles + 1):
-                # Floats drift: ~0.1-0.5 degrees per cycle
-                lat += random.gauss(0, 0.15)
-                lon += random.gauss(0, 0.15)
-                # Keep in reasonable bounds
-                lat = max(-60, min(30, lat))
-                lon = max(20, min(120, lon))
+                lat += random.gauss(0, 0.12)
+                lon += random.gauss(0, 0.12)
+                lat = max(-85, min(85, lat))
+                if lon > 180:
+                    lon -= 360
+                elif lon < -180:
+                    lon += 360
 
-                ts = (datetime.utcnow() - timedelta(days=(n_cycles - cycle) * 10 + random.randint(0, 3))).strftime("%Y-%m-%d %H:%M:%S")
+                ts = (now_utc - timedelta(days=(n_cycles - cycle) * 10 + random.randint(0, 3))).strftime("%Y-%m-%d %H:%M:%S")
 
-                # Predicted next position (simple linear extrapolation + noise)
-                pred_lat = round(lat + random.gauss(0.05, 0.1), 4)
-                pred_lon = round(lon + random.gauss(0.05, 0.1), 4)
-                confidence = round(max(0.3, min(0.95, 0.75 + random.gauss(0, 0.15))), 2)
+                pred_lat = round(lat + random.gauss(0.04, 0.08), 4)
+                pred_lon = round(lon + random.gauss(0.04, 0.08), 4)
+                confidence = round(max(0.35, min(0.95, 0.78 + random.gauss(0, 0.12))), 2)
 
                 conn.execute(text("""
                     INSERT INTO trajectory_points
@@ -221,12 +336,12 @@ def seed():
             float_id = info["id"]
             lat = info["lat"]
             lon = info["lon"]
-            n_cycles = random.randint(8, 20)
+            n_cycles = random.randint(5, 12)
 
             for cycle in range(1, n_cycles + 1):
-                lat_c = lat + random.gauss(0, 0.1) * cycle * 0.1
-                lon_c = lon + random.gauss(0, 0.1) * cycle * 0.1
-                ts = (datetime.utcnow() - timedelta(days=(n_cycles - cycle) * 10 + random.randint(0, 3)))
+                lat_c = lat + random.gauss(0, 0.08) * cycle * 0.08
+                lon_c = lon + random.gauss(0, 0.08) * cycle * 0.08
+                ts = (now_utc - timedelta(days=(n_cycles - cycle) * 10 + random.randint(0, 3)))
                 month = ts.month
                 ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -249,7 +364,7 @@ def seed():
         conn.commit()
         logger.info("Profile data inserted.")
 
-        # 4. Insert BGC profiles (only for BGC floats)
+        # 4. Insert BGC profiles (for BGC floats)
         logger.info("Generating BGC profile data...")
         bgc_floats = {k: v for k, v in float_ids.items() if v["is_bgc"]}
         bgc_pressures = [5, 10, 25, 50, 75, 100, 150, 200, 300, 500, 750, 1000]
@@ -258,12 +373,12 @@ def seed():
             float_id = info["id"]
             lat = info["lat"]
             lon = info["lon"]
-            n_cycles = random.randint(5, 15)
+            n_cycles = random.randint(4, 10)
 
             for cycle in range(1, n_cycles + 1):
-                lat_c = lat + random.gauss(0, 0.08) * cycle * 0.1
-                lon_c = lon + random.gauss(0, 0.08) * cycle * 0.1
-                ts = (datetime.utcnow() - timedelta(days=(n_cycles - cycle) * 10 + random.randint(0, 3)))
+                lat_c = lat + random.gauss(0, 0.06) * cycle * 0.08
+                lon_c = lon + random.gauss(0, 0.06) * cycle * 0.08
+                ts = (now_utc - timedelta(days=(n_cycles - cycle) * 10 + random.randint(0, 3)))
                 ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
 
                 for pressure in bgc_pressures:
@@ -293,8 +408,11 @@ def seed():
             count = result.scalar()
             logger.info("  %s: %d rows", table, count)
 
-    logger.info("Database seeding complete!")
+    logger.info("Global database seeding complete!")
 
 
 if __name__ == "__main__":
-    seed()
+    parser = argparse.ArgumentParser(description="Seed FloatChat database")
+    parser.add_argument("--force", action="store_true", help="Force re-seed and overwrite existing floats")
+    args = parser.parse_args()
+    seed(force=args.force)

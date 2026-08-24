@@ -2,16 +2,21 @@ import React from 'react'
 import { Polyline, CircleMarker, Popup } from 'react-leaflet'
 
 /**
- * USP 3 — Renders a dashed line from the float's current position to its
- * predicted next surfacing point, with a confidence-coloured marker.
+ * USP 3 — Renders a dashed trajectory drift line from the float's position to its
+ * predicted next surfacing point with a confidence indicator.
  */
 export default function TrajectoryPredictionLayer({
-  currentLat, currentLon, predLat, predLon, confidence,
+  currentLat,
+  currentLon,
+  predLat,
+  predLon,
+  confidence,
+  zoom = 4,
 }) {
   if (!predLat || !predLon) return null
 
-  const opacity = confidence ? Math.max(0.3, confidence) : 0.5
-  const color = confidence > 0.7 ? '#22c55e' : confidence > 0.5 ? '#f59e0b' : '#ef4444'
+  const color = confidence > 0.7 ? '#10b981' : confidence > 0.5 ? '#f59e0b' : '#38bdf8'
+  const radius = zoom <= 3 ? 2.5 : zoom <= 5 ? 4.0 : 5.5
 
   return (
     <>
@@ -20,17 +25,29 @@ export default function TrajectoryPredictionLayer({
           [currentLat, currentLon],
           [predLat, predLon],
         ]}
-        pathOptions={{ color, dashArray: '6 4', weight: 2, opacity }}
+        pathOptions={{
+          color,
+          dashArray: '4 3',
+          weight: 1.5,
+          opacity: 0.7,
+        }}
       />
       <CircleMarker
         center={[predLat, predLon]}
-        radius={5}
-        pathOptions={{ color, fillColor: color, fillOpacity: 0.6, weight: 2, dashArray: '4 2' }}
+        radius={radius}
+        pathOptions={{
+          color,
+          fillColor: color,
+          fillOpacity: 0.7,
+          weight: 1,
+        }}
       >
         <Popup>
-          <strong>Predicted next surfacing</strong><br />
-          Lat: {predLat.toFixed(3)}, Lon: {predLon.toFixed(3)}<br />
-          Confidence: {confidence ? `${(confidence * 100).toFixed(0)}%` : 'N/A'}
+          <div className="float-popup">
+            <strong>Predicted Next Surfacing</strong><br />
+            <span>Lat: {predLat.toFixed(3)}, Lon: {predLon.toFixed(3)}</span><br />
+            <span>Confidence: {confidence ? `${(confidence * 100).toFixed(0)}%` : 'N/A'}</span>
+          </div>
         </Popup>
       </CircleMarker>
     </>
